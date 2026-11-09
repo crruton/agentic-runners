@@ -106,6 +106,49 @@ def write_gitlab_csv(rows, out, hasher):
     return len(rows)
 
 
+PIPELINE_FIELDS = ["project", "pipeline_id", "ref", "source", "status", "created_at", "updated_at"]
+
+
+def write_pipelines_csv(rows, out):
+    final = os.path.join(out, "gitlab_pipelines.csv.gz")
+    part = final + ".part"
+    with gzip.open(part, "wt", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=PIPELINE_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    _publish(part, final)
+    return len(rows)
+
+
+def project_pipelines(s, base, project, since):
+    """Пайплайны проекта с источником (push, merge_request_event, schedule, …): нужен для replay политик отмены."""
+    from collect.ci_history import paged
+
+    rows = []
+    for p in paged(s, f"{base}/api/v4/projects/{project['id']}/pipelines", {"updated_after": since.isoformat()}):
+        rows.append({"project": project["path_with_namespace"], "pipeline_id": p["id"], "ref": p.get("ref"),
+                     "source": p.get("source"), "status": p.get("status"),
+                     "created_at": p.get("created_at"), "updated_at": p.get("updated_at")})
+    return rows
+
+
+def snapshot_gitlab_pipelines(token, base, days, out):
+    from collect.ci_history import paged, session
+
+    s = session(token)
+    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+    projects = list(paged(s, f"{base}/api/v4/projects", {
+        "membership": "true", "simple": "true", "last_activity_after": since.isoformat(),
+    }))
+    rows = []
+    with ThreadPoolExecutor(8) as pool:
+        for part in pool.map(lambda p: project_pipelines(s, base, p, since), projects):
+            rows.extend(part)
+    n = write_pipelines_csv(rows, out)
+    print(f"gitlab_pipelines: {len(projects)} проектов, {n} пайплайнов", file=sys.stderr)
+    return {"days": days, "projects": len(projects), "rows": n}
+
+
 def snapshot_gitlab(token, base, days, out):
     from collect.ci_history import paged, project_jobs, session
 
@@ -123,6 +166,27 @@ def snapshot_gitlab(token, base, days, out):
     return {"days": days, "projects": len(projects), "rows": n}
 
 
+# Задания, у которых в логе есть строки job-resources (печать добавлена в santinel 26.10.2026)
+RESOURCES_PROJECT = "raft-estimate/santinel"
+RESOURCES_JOBS = r"^(test:(pytest|dbt):|tia:map:)"
+RESOURCES_SINCE = "2026-10-26"
+
+
+def snapshot_job_resources(token, base, out):
+    import pandas as pd
+
+    from runners import resources
+
+    path = os.path.join(out, "gitlab_jobs.csv.gz")
+    if not os.path.exists(path):
+        raise RuntimeError("нужен gitlab_jobs.csv.gz в том же снимке")
+    g = pd.read_csv(path, compression="gzip")
+    g = g[(g.project == RESOURCES_PROJECT) & g.name.str.match(RESOURCES_JOBS) & g.started_at.notna()
+          & (g.created_at >= RESOURCES_SINCE)]
+    res = resources.collect(token, base, g, out)
+    return {**res, "project": RESOURCES_PROJECT, "jobs": RESOURCES_JOBS, "since": RESOURCES_SINCE}
+
+
 def take(root, days, only=None):
     out = os.path.join(root, dt.date.today().strftime("%Y%m%d"))
     os.makedirs(out, exist_ok=True)
@@ -134,6 +198,11 @@ def take(root, days, only=None):
         "gitlab": lambda: snapshot_gitlab(_env("GITLAB_TOKEN"),
                                           os.environ.get("GITLAB_URL", "https://gitlab.raftds.com").rstrip("/"),
                                           days, out),
+        "gitlab_pipelines": lambda: snapshot_gitlab_pipelines(
+            _env("GITLAB_TOKEN"), os.environ.get("GITLAB_URL", "https://gitlab.raftds.com").rstrip("/"), days, out),
+        # после gitlab: берёт список заданий из только что снятого gitlab_jobs.csv.gz
+        "job_resources": lambda: snapshot_job_resources(
+            _env("GITLAB_TOKEN"), os.environ.get("GITLAB_URL", "https://gitlab.raftds.com").rstrip("/"), out),
     }
     for name, fn in jobs.items():
         if only and name != only:

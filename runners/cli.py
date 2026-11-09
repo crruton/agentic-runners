@@ -11,7 +11,7 @@ def main(argv=None):
     s = sub.add_parser("snapshot", help="снять БД ci_analytics и историю GitLab в data/snapshots/<дата>/")
     s.add_argument("--root", default="data/snapshots")
     s.add_argument("--days", type=int, default=30, help="глубина выгрузки GitLab")
-    s.add_argument("--only", choices=["ci_analytics", "gitlab"])
+    s.add_argument("--only", choices=["ci_analytics", "gitlab", "gitlab_pipelines", "job_resources"])
 
     li = sub.add_parser("import-legacy", help="перенести старый снимок и CSV в новую структуру")
     li.add_argument("--db-dir", default="data/ci_analytics/20261109")
@@ -23,7 +23,28 @@ def main(argv=None):
     r.add_argument("--snapshot", help="YYYYMMDD, по умолчанию последний")
     r.add_argument("--out", default="out")
 
+    sub.add_parser("numbers", help="docs/talk/numbers.md из out/metrics.json")
+    sub.add_parser("check", help="ссылки на показатели в docs/ существуют, numbers.md свежий")
+    a = sub.add_parser("all", help="report + numbers + check: весь офлайн-процесс одной командой")
+    a.add_argument("--root", default="data/snapshots")
+    a.add_argument("--snapshot")
+
     args = ap.parse_args(argv)
+    if args.cmd in ("numbers", "check", "all"):
+        from runners import docs
+        if args.cmd == "all":
+            from runners.load import SnapshotMissing, load
+            from runners.report import build
+            try:
+                print(*build(load(args.root, args.snapshot), "out"), sep="\n")
+            except SnapshotMissing as e:
+                sys.exit(f"{e}. Сначала снимите данные: python -m runners snapshot")
+        if args.cmd in ("numbers", "all"):
+            print(docs.numbers())
+        problems = docs.check() if args.cmd in ("check", "all") else []
+        for p in problems:
+            print(p, file=sys.stderr)
+        sys.exit(1 if problems else 0)
     if args.cmd == "snapshot":
         from runners.snapshot import take
         sys.exit(take(args.root, args.days, args.only))

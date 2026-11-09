@@ -64,7 +64,7 @@ def test_missing_gitlab_marks_sections(tmp_path):
     root = tmp_path / "snapshots"
     make_snapshot(str(root), with_gitlab=False)
     html, _ = _build(str(root), tmp_path / "out")
-    assert html.count("Нет данных в снимке") == 5  # queue, canceled, classes, hot, whatif
+    assert html.count("Нет данных в снимке") == 6  # queue, canceled, classes, hot, whatif + cgroup (нет логов в фикстуре)
     assert '<section id="trend">' in html and "Нет данных" not in html.split('<section id="queue">')[0]
 
 
@@ -159,3 +159,60 @@ def test_simulation_fifo_and_interruptible():
     w, busy = whatif.simulate(g, 1, "all")
     # первое стартует в модели сразу по готовности (−1 мин) и прерывается на 9-й: 10 мин + 5 мин второго
     assert list(w) == [0.0, 0.0] and round(busy * 60) == 15
+
+
+SAMPLE_LOG = """\x1b[0;m2026-11-04T09:34:07Z 01O Running on CPU: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz (avx, avx2)
+2026-11-04T09:34:42Z 01O workers: 3 (cpu 4, mem 4096 MiB, per-worker 1100 MiB, heaviest +336 MiB, reserve 256 MiB, ceiling 6)
+2026-11-04T10:10:52Z 01O job-resources: cgroup v2 memory.events: oom_kill=1 oom=1 max=1634 high=0
+2026-11-04T10:10:52Z 01O job-resources: cgroup v2 memory: peak=4096MiB max=4096MiB current=40MiB swap.peak=0MiB
+2026-11-04T10:10:52Z 01O job-resources: host meminfo: MemTotal=15383MiB MemAvailable=9873MiB SwapTotal=4095MiB SwapFree=3802MiB
+2026-11-04T10:10:52Z 01O job-resources: host vmstat: oom_kill=48 pswpin=42454822 pswpout=60492662 (за прогон: oom_kill+1 pswpin+113 pswpout+2165)
+2026-11-04T10:10:52Z 01O job-resources: host pressure memory: some avg10=0.00 avg60=0.04 avg300=0.03 total=1 | full avg10=0.00 avg60=0.04 avg300=0.02 total=1
+2026-11-04T10:10:52Z 01O job-resources: cpu: nproc=4 cpu_count=8 cpu.max=max 100000 effective=4 loadavg=3.87 5.60 5.72 2/497 38001
+"""
+
+
+def test_parse_job_resources():
+    from runners.resources import parse
+    r = parse(SAMPLE_LOG)
+    assert r["cpu_model"] == "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz"
+    assert (r["workers"], r["mem_max_mib"], r["mem_peak_mib"]) == (3, 4096, 4096)
+    assert (r["job_oom_kill"], r["job_mem_max_events"]) == (1, 1634)
+    assert (r["host_oom_kill_total"], r["host_oom_kill_delta"], r["host_pswpout_delta"]) == (48, 1, 2165)
+    assert (r["nproc"], r["cpu_count"], r["cpu_max"], r["loadavg1"]) == (4, 8, "max 100000", 3.87)
+    assert r["host_psi_mem_some_avg300"] == 0.03 and r["parsed"] == 1
+
+
+def test_parse_unknown_log_is_empty():
+    from runners.resources import parse
+    assert parse("just some build output\n") == {"parsed": 0}
+
+
+def test_schedule_pipeline_does_not_supersede_push():
+    import pandas as pd
+    from runners import whatif
+    jobs = _jobs([(1, "main", "test:a", 0, 30), (2, "main", "test:a", 10, 5)])
+    pipes = pd.DataFrame({"pipeline_id": [1, 2], "source": ["push", "schedule"]})
+    g = whatif.prepare(jobs, pipes)
+    assert whatif.interruptible_saved(g, "all").saved_s.sum() == 0
+    pipes["source"] = ["push", "push"]
+    g = whatif.prepare(jobs, pipes)
+    assert whatif.interruptible_saved(g, "all").saved_s.sum() == 21 * 60
+
+
+def test_numbers_and_check(snap_root, tmp_path):
+    from runners import docs
+    _build(snap_root, tmp_path / "out")
+    m = str(tmp_path / "out" / "metrics.json")
+    d = tmp_path / "docs"
+    d.mkdir()
+    out = str(d / "talk" / "numbers.md")
+    docs.numbers(m, out)
+    first = open(out, encoding="utf-8").read()
+    docs.numbers(m, out)
+    assert open(out, encoding="utf-8").read() == first
+    (d / "ok.md").write_text("p95 — `queue.p95_s`\n", encoding="utf-8")
+    assert docs.check(m, str(d), out) == []
+    (d / "bad.md").write_text("p97 — `queue.p97_s`\n", encoding="utf-8")
+    problems = docs.check(m, str(d), out)
+    assert len(problems) == 1 and "bad.md:1" in problems[0] and "queue.p97_s" in problems[0]

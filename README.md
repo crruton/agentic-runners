@@ -14,15 +14,16 @@ pip install pandas psycopg2-binary requests tabulate pytest
 # один раз под VPN: снимок БД ci_analytics и истории GitLab → data/snapshots/<YYYYMMDD>/
 export CI_ANALYTICS_DSN=postgresql://exporter:<пароль>@10.71.30.92:30432/ci_analytics
 export GITLAB_TOKEN=<токен>
-python -m runners snapshot            # --only ci_analytics | gitlab, если нужен один источник
+python -m runners snapshot            # --only ci_analytics | gitlab | gitlab_pipelines | job_resources
 
 # офлайн, сколько угодно раз: out/report.html (один файл) и out/metrics.json
 python -m runners report              # --snapshot 20261109 для конкретного снимка
+python -m runners all                 # report + docs/talk/numbers.md + проверка ссылок на показатели
 
 python -m pytest -q tests
 ```
 
-Числа для доклада берутся из `out/metrics.json` по идентификатору показателя (например, `queue.p95_s`).
+Числа для доклада берутся из `docs/talk/numbers.md` (генерируется из `out/metrics.json`). Процесс по уровням — `docs/process.md`.
 
 ## Где что лежит
 

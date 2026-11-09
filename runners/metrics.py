@@ -339,10 +339,66 @@ def compute(snap):
     from runners.whatif import whatif  # whatif использует примитивы этого модуля
 
     sections = [trend(snap), queue(snap), canceled(snap), classes(snap), top_projects(snap), hot_project(snap),
-                runners(snap), whatif(snap)]
+                runners(snap), job_resources(snap), whatif(snap)]
     sections.append(quality(snap, sections))
     return sections
 
 
 KPI = ["trend.jobs_growth", "trend.runner_h_growth", "runners.fleet_growth", "queue.p95_s", "queue.p99_s",
        "canceled.before_start_pct", "projects.top_share_pct", "whatif.interruptible_saved_pct"]
+
+
+# --- ресурсы задания из логов (cgroup v2) ----------------------------------------------
+
+def job_resources(snap):
+    s = Section("cgroup", "Ресурсы задания: cgroup v2 по логам шардов", "gitlab-логи", "")
+    r = snap.resources
+    if r is None or not len(r) or not r.parsed.sum():
+        s.missing = True
+        return s
+    r = r[r.parsed == 1].copy()
+    s.period = period(r.created_at.min(), r.created_at.max())
+    oom = r.job_oom_kill.fillna(0) > 0
+    if snap.gitlab is not None:
+        r = r.merge(snap.gitlab[["job_id", "duration_s"]], on="job_id", how="left")
+    else:
+        r["duration_s"] = float("nan")
+    at_max = r.mem_max_mib.notna() & (r.mem_peak_mib >= r.mem_max_mib)
+    t = (r.groupby("runner").agg(jobs=("job_id", "count"), cpu_count=("cpu_count", "max"), nproc=("nproc", "max"),
+                                 mem_max_mib=("mem_max_mib", "max"),
+                                 oom_jobs=("job_oom_kill", lambda x: int((x.fillna(0) > 0).sum())),
+                                 host_oom_total=("host_oom_kill_total", "max"),
+                                 dur_p50_s=("duration_s", lambda x: q(x, .5)))
+         .sort_values("jobs", ascending=False))
+    s.tables["by_runner"] = t
+    w = (r.groupby("mem_max_mib").agg(jobs=("job_id", "count"), workers_p50=("workers", "median"),
+                                      oom_pct=("job_oom_kill", lambda x: r1(100 * (x.fillna(0) > 0).mean())),
+                                      dur_p50_s=("duration_s", lambda x: q(x, .5))))
+    w["at_max_pct"] = r.assign(a=at_max).groupby("mem_max_mib").a.mean().mul(100).round(1)
+    s.tables["by_mem_max"] = w
+    src, p = "gitlab-логи", s.period
+    s.metrics = [
+        Metric("cgroup.jobs", "Заданий с телеметрией cgroup", int(len(r)), "заданий", src, p),
+        Metric("cgroup.host_cpu_p50", "Ядер у хоста (cpu_count), медиана", r1(r.cpu_count.median()), "шт.", src, p),
+        Metric("cgroup.job_cpu_p50", "CPU, видимых заданию (cpuset nproc), медиана", r1(r.nproc.median()), "шт.", src, p),
+        Metric("cgroup.at_mem_max_pct", "Заданий, упёршихся в memory.max (peak = max)", r1(100 * at_max.mean()), "%", src, p),
+        Metric("cgroup.oom_kill_pct", "Заданий с OOM-kill внутри cgroup", r1(100 * oom.mean()), "%", src, p),
+        Metric("cgroup.oom_kill_jobs", "Заданий с OOM-kill внутри cgroup", int(oom.sum()), "заданий", src, p),
+        Metric("cgroup.hosts_with_oom", "Регистраций на хостах, где ядро уже убивало процессы (oom_kill > 0)", int((t.host_oom_total.fillna(0) > 0).sum()), "шт.", src, p),
+    ]
+    # Естественный эксперимент: те же шарды на хостах разного класса (по числу ядер хоста)
+    for cores, h in r.groupby("cpu_count"):
+        c = int(cores)
+        s.metrics += [
+            Metric(f"cgroup.cpu{c}_jobs", f"Хосты {c} ядер: заданий", int(len(h)), "заданий", src, p),
+            Metric(f"cgroup.cpu{c}_dur_p50_s", f"Хосты {c} ядер: медиана длительности шарда", q(h.duration_s, .5), "с", src, p),
+            Metric(f"cgroup.cpu{c}_oom_pct", f"Хосты {c} ядер: заданий с OOM-kill в cgroup", r1(100 * (h.job_oom_kill.fillna(0) > 0).mean()), "%", src, p),
+            Metric(f"cgroup.cpu{c}_host_oom_max", f"Хосты {c} ядер: OOM-kill ядра хоста с загрузки, максимум", r1(h.host_oom_kill_total.max()), "шт.", src, p),
+        ]
+    s.notes += [
+        "Источник — строки job-resources: в логах шардов santinel (scripts/ci_job_resources.py проекта). Только этот проект, "
+        "только шарды pytest/dbt/tia с 26.10.",
+        "peak включает page cache: упор в memory.max сам по себе не доказывает OOM; доказательство — oom_kill > 0 у cgroup задания.",
+        "Число xdist-воркеров шард выбирает сам из memory.max и cpuset: меньше памяти — меньше воркеров — дольше задание.",
+    ]
+    return s

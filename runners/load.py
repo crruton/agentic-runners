@@ -18,9 +18,11 @@ class Snapshot:
     path: str
     manifest: dict
     gitlab: pd.DataFrame | None       # задания GitLab, одна строка = задание
+    pipelines: pd.DataFrame | None    # пайплайны GitLab с источником (push, merge_request_event, schedule, …)
     daily: pd.DataFrame | None        # project_daily_report: агрегаты по проекту и дню
     jobs: pd.DataFrame | None         # job_details, развёрнутый JSON
     runners: pd.DataFrame | None
+    resources: pd.DataFrame | None = None  # job_resources.csv.gz: cgroup v2 задания из логов
     fleet: pd.DataFrame | None = None  # docs/research/fleet.csv: размер парка во времени, с источником
 
 
@@ -94,6 +96,22 @@ def _fleet(path):
     return df.sort_values("date")
 
 
+def _resources(path):
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path, compression="gzip")
+    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, format="ISO8601")
+    return df
+
+
+def _pipelines(path):
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path, compression="gzip")
+    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, format="ISO8601")
+    return df
+
+
 def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv"):
     day = day or latest(root)
     path = os.path.join(root, day)
@@ -106,8 +124,10 @@ def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv"):
         path=path,
         manifest=manifest,
         gitlab=_gitlab(os.path.join(path, "gitlab_jobs.csv.gz")),
+        pipelines=_pipelines(os.path.join(path, "gitlab_pipelines.csv.gz")),
         daily=_daily(_jsonl(os.path.join(db, "project_daily_report.jsonl.gz"))),
         jobs=_jobs(_jsonl(os.path.join(db, "job_details.jsonl.gz"))),
         runners=_runners(_jsonl(os.path.join(db, "runners.jsonl.gz"))),
+        resources=_resources(os.path.join(path, "job_resources.csv.gz")),
         fleet=_fleet(fleet),
     )

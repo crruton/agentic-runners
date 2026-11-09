@@ -38,18 +38,30 @@ def cuttable(g, mode):
     raise ValueError(mode)
 
 
-def _with_next_pipeline(g):
-    """Каждому заданию — время создания следующего пайплайна на той же ветке проекта."""
-    pc = (g.groupby(["project", "ref", "pipeline_id"]).created_at.min().reset_index()
-          .sort_values(["project", "ref", "created_at", "pipeline_id"]))
+# Источники пайплайнов, которые GitLab отменяет как устаревшие и которые сами вытесняют старые.
+# Расписания, API и веб так себя не ведут (а в santinel расписания явно защищены on_new_commit: none).
+SUPERSEDING = ("push", "merge_request_event")
+
+
+def _with_next_pipeline(g, pipelines=None):
+    """Каждому заданию — время создания следующего пайплайна на той же ветке проекта.
+
+    Если известны источники пайплайнов, участвуют только push и MR: расписание не вытесняет
+    пайплайн пуша и само не вытесняется.
+    """
+    pc = g.groupby(["project", "ref", "pipeline_id"]).created_at.min().reset_index()
+    if pipelines is not None:
+        pc = pc.merge(pipelines[["pipeline_id", "source"]], on="pipeline_id", how="left")
+        pc = pc[pc.source.isin(SUPERSEDING)]
+    pc = pc.sort_values(["project", "ref", "created_at", "pipeline_id"])
     pc["next_created"] = pc.groupby(["project", "ref"]).created_at.shift(-1)
     return g.merge(pc[["pipeline_id", "next_created"]], on="pipeline_id", how="left")
 
 
-def prepare(gitlab):
+def prepare(gitlab, pipelines=None):
     """Задания для replay: готовность к запуску, длительность, срок отмены."""
     g = gitlab[gitlab.status.isin(DONE)].copy()
-    g = _with_next_pipeline(g)
+    g = _with_next_pipeline(g, pipelines)
     started = g.started_at.notna() & g.duration_s.notna()
     q_s = pd.to_timedelta(g.queued_s.fillna(0), unit="s")
     # момент, когда задание стало pending: старт минус ожидание; у отменённых до старта — отмена минус ожидание
@@ -118,7 +130,7 @@ def whatif(snap):
         s.missing = True
         return s
     s.period = gitlab_period(snap.gitlab)
-    g = prepare(snap.gitlab)
+    g = prepare(snap.gitlab, snap.pipelines)
     total_h = g[g.started].duration_s.sum() / 3600
     saved = {m: interruptible_saved(g, m) for m in MODES}
     main = saved["no_deploy"]

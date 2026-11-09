@@ -45,6 +45,9 @@
 
 ### Шаг 2. Системная телеметрия (11–12.11)
 
+Обновление 09.11: Grafana недоступна. Источник телеметрии — строки `job-resources:` в логах шардов santinel (`runners snapshot --only job_resources`): cgroup v2 задания, `/proc/vmstat` и PSI хоста. Результат — E02. Пункты ниже — только если появится доступ к хостам.
+
+
 - node_exporter с PSI (`/proc/pressure/{cpu,memory,io}`) на всех раннерах.
 - Статистика cgroup на каждое задание: `cpu.stat`, `memory.peak`, `io.stat`.
 - Prometheus и Grafana с дашбордом «раннер» и «класс задания».
