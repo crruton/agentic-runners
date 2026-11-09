@@ -23,7 +23,8 @@ class Snapshot:
     jobs: pd.DataFrame | None         # job_details, развёрнутый JSON
     runners: pd.DataFrame | None
     resources: pd.DataFrame | None = None  # job_resources.csv.gz: cgroup v2 задания из логов
-    fleet: pd.DataFrame | None = None  # docs/research/fleet.csv: размер парка во времени, с источником
+    fleet: pd.DataFrame | None = None
+    bench: dict | None = None  # последний прогон data/bench/<run>/results.json (E03)  # docs/research/fleet.csv: размер парка во времени, с источником
 
 
 def latest(root):
@@ -104,6 +105,20 @@ def _resources(path):
     return df
 
 
+def _bench(root):
+    """Последний завершённый прогон эмуляции: каталог с наибольшим именем, где есть results.json."""
+    if not root or not os.path.isdir(root):
+        return None
+    for run in sorted(os.listdir(root), reverse=True):
+        path = os.path.join(root, run, "results.json")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            doc["run"] = run
+            return doc
+    return None
+
+
 def _pipelines(path):
     if not os.path.exists(path):
         return None
@@ -112,7 +127,7 @@ def _pipelines(path):
     return df
 
 
-def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv"):
+def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv", bench="data/bench"):
     day = day or latest(root)
     path = os.path.join(root, day)
     if not os.path.isdir(path):
@@ -130,4 +145,5 @@ def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv"):
         runners=_runners(_jsonl(os.path.join(db, "runners.jsonl.gz"))),
         resources=_resources(os.path.join(path, "job_resources.csv.gz")),
         fleet=_fleet(fleet),
+        bench=_bench(bench),
     )

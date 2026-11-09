@@ -23,6 +23,10 @@ def main(argv=None):
     r.add_argument("--snapshot", help="YYYYMMDD, по умолчанию последний")
     r.add_argument("--out", default="out")
 
+    b = sub.add_parser("bench", help="A/B конфигураций раннера на эмулированном ноутбуке (нужен Docker)")
+    b.add_argument("--only", help="сценарии через запятую, по умолчанию все")
+    b.add_argument("--root", default="data/bench")
+    b.add_argument("--resume", help="каталог прогона YYYYMMDD-HHMM: досчитать недостающие сценарии")
     sub.add_parser("numbers", help="docs/talk/numbers.md из out/metrics.json")
     sub.add_parser("check", help="ссылки на показатели в docs/ существуют, numbers.md свежий")
     a = sub.add_parser("all", help="report + numbers + check: весь офлайн-процесс одной командой")
@@ -30,6 +34,10 @@ def main(argv=None):
     a.add_argument("--snapshot")
 
     args = ap.parse_args(argv)
+    if args.cmd == "bench":
+        from runners import bench
+        bench.run(args.only.split(",") if args.only else None, args.root, args.resume)
+        return
     if args.cmd in ("numbers", "check", "all"):
         from runners import docs
         if args.cmd == "all":

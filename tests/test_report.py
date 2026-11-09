@@ -11,7 +11,7 @@ from tests.conftest import HOT, LOGIN, make_snapshot
 
 
 def _build(root, out):
-    paths = build(load(root), out)
+    paths = build(load(root, bench=None), out)  # тесты не зависят от локальных прогонов data/bench
     html = open(paths[0], encoding="utf-8").read()
     js = open(paths[1], encoding="utf-8").read()
     return html, js
@@ -64,7 +64,7 @@ def test_missing_gitlab_marks_sections(tmp_path):
     root = tmp_path / "snapshots"
     make_snapshot(str(root), with_gitlab=False)
     html, _ = _build(str(root), tmp_path / "out")
-    assert html.count("Нет данных в снимке") == 6  # queue, canceled, classes, hot, whatif + cgroup (нет логов в фикстуре)
+    assert html.count("Нет данных в снимке") == 7  # queue, canceled, classes, hot, whatif + cgroup и bench (нет в фикстуре)
     assert '<section id="trend">' in html and "Нет данных" not in html.split('<section id="queue">')[0]
 
 
@@ -216,3 +216,12 @@ def test_numbers_and_check(snap_root, tmp_path):
     (d / "bad.md").write_text("p97 — `queue.p97_s`\n", encoding="utf-8")
     problems = docs.check(m, str(d), out)
     assert len(problems) == 1 and "bad.md:1" in problems[0] and "queue.p97_s" in problems[0]
+
+
+def test_bench_workers_rule_matches_santinel_readme():
+    from runners.bench import ncpus, workers_for
+    # infra/ci/README.md santinel: бюджет 1600 MiB — 4096/4608/5120 → 2, 6144 → 3, 8192 → 4 воркера при ≥4 CPU
+    assert [workers_for("budget1600", "pytest", 4, m) for m in (4096, 4608, 5120, 6144, 8192)] == [2, 2, 2, 3, 4]
+    assert workers_for("budget1100", "pytest", 4, 4096) == 3   # старая формула давала N=3 на 4 GiB
+    assert workers_for("budget1600", "dbt", 4, 4096) == 4
+    assert ncpus("0-3") == 4 and ncpus("0-7") == 8 and ncpus("0,2-3") == 3

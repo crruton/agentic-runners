@@ -108,6 +108,11 @@ def _charts(sec):
         out += ["<h3>Медиана длительности шарда по лимиту памяти задания, мин</h3>",
                 charts.hbars([f"memory.max {int(m)} MiB · {int(n)} заданий" for m, n in zip(w.index, w.jobs)],
                              (w.dur_p50_s / 60).round(1), "мин")]
+    elif sec.id == "bench":
+        sc = t["scenarios"]
+        out += ["<h3>Время на 2 пайплайна (12 шардов), с</h3>",
+                charts.hbars([f"{n} · {row.title}" for n, row in sc.iterrows()], sc.makespan_s, "с",
+                             {i for i, n in enumerate(sc.index) if n == "A-now"})]
     elif sec.id == "runners":
         r = t["runners"].dropna(subset=["busy_h"])
         lab = [f"#{i} · {row.cpu} · {row.ram}" for i, row in r.iterrows()]

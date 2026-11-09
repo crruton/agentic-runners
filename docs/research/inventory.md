@@ -12,6 +12,9 @@
 | Хостов по именам в GitLab | 11 основных (`notebook-runner-*`, `nvme-runner`, `adata-runner`, `runner-ssd`, `office-mini-m1`) + `buran-k8s` и стенд выкатки | выгрузка GitLab, поле `runner.description` |
 | Теги регистраций | `cpu-2`/`cpu-4`, `ram-3g`/`ram-4g`/`ram-6g`/`ram-8g`, у двух `16g` | `ci_analytics.runners` |
 | Кто запускает CI | все запуски идут через агентов | со слов владельца, 09.11 |
+| Эталон ноутбука-раннера | Intel Core Ultra 5 125U, 12 ядер / 14 потоков, 39 GiB, NVMe SK hynix 512 GB; остальные ноутбуки «подобные» | рабочая машина владельца, 09.11 (`runners bench`, ADR-0004) |
+| `buran-k8s` | сервер с RTX 4090, примерно в 3 раза мощнее ноутбука; теги `buran`, `k8s`, `ci-rootless`, в пул тестов `ci-any-arch` не входит; 233 задания за 30 дней | владелец 09.11; GitLab API `runners/67` |
+| Права на теги общих раннеров | только администратор GitLab; токен проекта не админский | GitLab API `/user`, 09.11 |
 
 ## Как это читать
 

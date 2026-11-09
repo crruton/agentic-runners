@@ -339,7 +339,7 @@ def compute(snap):
     from runners.whatif import whatif  # whatif использует примитивы этого модуля
 
     sections = [trend(snap), queue(snap), canceled(snap), classes(snap), top_projects(snap), hot_project(snap),
-                runners(snap), job_resources(snap), whatif(snap)]
+                runners(snap), job_resources(snap), bench_ab(snap), whatif(snap)]
     sections.append(quality(snap, sections))
     return sections
 
@@ -400,5 +400,61 @@ def job_resources(snap):
         "только шарды pytest/dbt/tia с 26.10.",
         "peak включает page cache: упор в memory.max сам по себе не доказывает OOM; доказательство — oom_kill > 0 у cgroup задания.",
         "Число xdist-воркеров шард выбирает сам из memory.max и cpuset: меньше памяти — меньше воркеров — дольше задание.",
+    ]
+    return s
+
+
+# --- эмуляция A/B конфигураций раннера (E03) -------------------------------------------
+
+def bench_ab(snap):
+    s = Section("bench", "Эмуляция A/B: конфигурация ноутбука-раннера", "эмуляция", "")
+    b = snap.bench
+    if not b or not b.get("scenarios"):
+        s.missing = True
+        return s
+    s.period = f"прогон {b['run']}"
+    rows = []
+    for sc in b["scenarios"]:
+        sh = pd.DataFrame(sc["shards"])
+        first = sh[sh.attempt == 1]
+        span = sc["makespan_s"] * 1e6
+        rows.append({
+            "scenario": sc["name"], "title": sc["title"], "makespan_s": sc["makespan_s"],
+            "shards_failed": int((~first.ok.astype(bool)).sum()), "retries": int((sh.attempt == 2).sum()),
+            "job_oom_kill": int(sh.oom_kill.fillna(0).sum()) if "oom_kill" in sh else 0,
+            # OOM самого «хоста» без OOM внутри заданий: memory.events.local, для старых прогонов — разность
+            "host_oom_kill": sc.get("host_local_oom_kill",
+                                    sc.get("host_oom_kill", 0) - int(sh.oom_kill.fillna(0).sum() if "oom_kill" in sh else 0)),
+            "host_mem_peak_mib": sc.get("host_mem_peak_mib"),
+            "job_mem_peak_max_mib": int(sh.mem_peak_mib.max()) if "mem_peak_mib" in sh else None,
+            "mem_pressure_pct": r1(100 * sc.get("memory_pressure_some_us", 0) / span),
+            "cpu_pressure_pct": r1(100 * sc.get("cpu_pressure_some_us", 0) / span),
+            "pytest_dur_p50_s": q(first[first.kind == "pytest"].wall_s, .5),
+        })
+    t = pd.DataFrame(rows).set_index("scenario")
+    base = t.makespan_s.get("A-now")
+    if base:
+        t["vs_A_pct"] = (100 * (t.makespan_s / base - 1)).round(1)
+    s.tables["scenarios"] = t
+    src, p = "эмуляция", s.period
+    for name, r in t.iterrows():
+        key = name.split("-")[0].lower()
+        s.metrics += [
+            Metric(f"bench.{key}_makespan_s", f"{name}: время на 2 пайплайна (12 шардов)", r1(r.makespan_s), "с", src, p),
+            Metric(f"bench.{key}_failed", f"{name}: шардов упало с первой попытки", int(r.shards_failed), "шт.", src, p),
+            Metric(f"bench.{key}_job_oom", f"{name}: OOM-kill в cgroup заданий", int(r.job_oom_kill), "шт.", src, p),
+            Metric(f"bench.{key}_host_oom", f"{name}: OOM-kill на уровне хоста", int(r.host_oom_kill), "шт.", src, p),
+            Metric(f"bench.{key}_mem_pressure_pct", f"{name}: PSI memory some, доля времени", r.mem_pressure_pct, "%", src, p),
+            Metric(f"bench.{key}_cpu_pressure_pct", f"{name}: PSI cpu some, доля времени", r.cpu_pressure_pct, "%", src, p),
+            Metric(f"bench.{key}_pytest_p50_s", f"{name}: медиана шарда pytest (первая попытка)", r.pytest_dur_p50_s, "с", src, p),
+        ]
+        if "vs_A_pct" in t and name != "A-now":
+            s.metrics.append(Metric(f"bench.{key}_vs_a_pct", f"{name}: время относительно A-now", r.vs_A_pct, "%", src, p))
+    m = b.get("machine", {})
+    s.notes += [
+        f"Машина: {m.get('cpu', '—')}, {m.get('ram_gib', '—')} GiB; VM Docker: {m.get('docker', {}).get('ncpu', '—')} CPU, "
+        f"ядро {m.get('docker', {}).get('kernel', '—')}. Хост эмулирован cgroup v2: {b['host']['cpus']} CPU, {b['host']['mem']}, своп {b['host']['swap']}.",
+        "Нагрузка одинакова во всех сценариях (seed), время масштабировано: сравнивать сценарии между собой, не с боевыми секундами. "
+        "Упавший шард перезапускается один раз (агент пушит снова) — его время входит в итог. ADR-0004.",
     ]
     return s
