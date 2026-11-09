@@ -99,6 +99,10 @@ def _charts(sec):
     elif sec.id == "hot":
         j = t["jobs"]
         out += ["<h3>Самые тяжёлые задания, часы</h3>", charts.hbars(list(j.index), j.busy_h, "ч")]
+    elif sec.id == "whatif":
+        qt = t["queue"]
+        out += ["<h3>Очередь p95, мин: факт и модель</h3>",
+                charts.hbars(list(qt.index), (qt.p95_s / 60).round(1), "мин", {2})]
     elif sec.id == "runners":
         r = t["runners"].dropna(subset=["busy_h"])
         lab = [f"#{i} · {row.cpu} · {row.ram}" for i, row in r.iterrows()]

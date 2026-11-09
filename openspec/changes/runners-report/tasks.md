@@ -30,3 +30,9 @@
 - [x] 5.1 `import-legacy` на реальных данных, `report` офлайн; сверить KPI с `docs/experiments/E00-baseline-summary.md`
 - [x] 5.2 Обновить E00 (все запуски через агентов; ссылка на отчёт), README (как запустить), CHANGELOG
 - [x] 5.3 `openspec validate runners-report`, коммит, push в обе удалённые ветки
+
+## 6. Дополнение 09.11: replay и окно роста
+
+- [x] 6.1 `runners/whatif.py`: replay `interruptible` (три варианта), FIFO-модель очереди с калибровкой слотов, раздел «Что если»
+- [x] 6.2 Рост за 2 месяца с усреднением краёв; `docs/research/fleet.csv` и `inventory.md`; показатели парка
+- [x] 6.3 Тесты replay и модели; E01 в журнале экспериментов; план и AGENTS.md: репозитории не менять

@@ -21,6 +21,7 @@ class Snapshot:
     daily: pd.DataFrame | None        # project_daily_report: агрегаты по проекту и дню
     jobs: pd.DataFrame | None         # job_details, развёрнутый JSON
     runners: pd.DataFrame | None
+    fleet: pd.DataFrame | None = None  # docs/research/fleet.csv: размер парка во времени, с источником
 
 
 def latest(root):
@@ -86,7 +87,14 @@ def _gitlab(path):
     return df
 
 
-def load(root="data/snapshots", day=None):
+def _fleet(path):
+    if not path or not os.path.exists(path):
+        return None
+    df = pd.read_csv(path, parse_dates=["date"])
+    return df.sort_values("date")
+
+
+def load(root="data/snapshots", day=None, fleet="docs/research/fleet.csv"):
     day = day or latest(root)
     path = os.path.join(root, day)
     if not os.path.isdir(path):
@@ -101,4 +109,5 @@ def load(root="data/snapshots", day=None):
         daily=_daily(_jsonl(os.path.join(db, "project_daily_report.jsonl.gz"))),
         jobs=_jobs(_jsonl(os.path.join(db, "job_details.jsonl.gz"))),
         runners=_runners(_jsonl(os.path.join(db, "runners.jsonl.gz"))),
+        fleet=_fleet(fleet),
     )

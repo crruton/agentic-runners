@@ -38,7 +38,7 @@ def test_report_offline_sections_and_no_pii(snap_root, tmp_path):
     html, js = _build(snap_root, tmp_path / "out")
     assert not re.search(r"(src|href)=[\"']?https?://", html)
     assert "<script" not in html and "<link" not in html
-    for sid in ("trend", "queue", "canceled", "classes", "projects", "hot", "runners", "quality"):
+    for sid in ("trend", "queue", "canceled", "classes", "projects", "hot", "runners", "whatif", "quality"):
         assert f'<section id="{sid}">' in html
     assert 'class="kpis"' in html
     for leak in (LOGIN, "bob.smith", "secret commit title"):
@@ -56,14 +56,15 @@ def test_every_metric_has_source_and_period(snap_root, tmp_path):
     import json
     _, js = _build(snap_root, tmp_path / "out")
     for m in json.loads(js)["metrics"].values():
-        assert m["source"] in ("gitlab", "ci_analytics") and m["period"]
+        assert m["source"] and m["period"]
+        assert set(m["source"].split(" + ")) <= {"gitlab", "ci_analytics", "владелец"}
 
 
 def test_missing_gitlab_marks_sections(tmp_path):
     root = tmp_path / "snapshots"
     make_snapshot(str(root), with_gitlab=False)
     html, _ = _build(str(root), tmp_path / "out")
-    assert html.count("Нет данных в снимке") == 4  # queue, canceled, classes, hot
+    assert html.count("Нет данных в снимке") == 5  # queue, canceled, classes, hot, whatif
     assert '<section id="trend">' in html and "Нет данных" not in html.split('<section id="queue">')[0]
 
 
@@ -125,3 +126,36 @@ def test_network_drop_leaves_no_final_file(tmp_path, monkeypatch):
     assert "job_details.jsonl.gz" not in files
     manifest = open(os.path.join("snapshots", day, "manifest.json"), encoding="utf-8").read()
     assert '"failed"' in manifest and "supersecret" not in manifest
+
+
+def _jobs(rows):
+    import pandas as pd
+    base = pd.Timestamp("2026-11-01T10:00:00Z")
+    recs = []
+    for i, (pipe, ref, name, start_min, dur_min) in enumerate(rows):
+        recs.append({"project": "p", "job_id": i, "pipeline_id": pipe, "ref": ref, "name": name, "status": "success",
+                     "created_at": base + pd.Timedelta(minutes=start_min - 1),
+                     "started_at": base + pd.Timedelta(minutes=start_min),
+                     "finished_at": base + pd.Timedelta(minutes=start_min + dur_min),
+                     "queued_s": 60.0, "duration_s": dur_min * 60.0})
+    return pd.DataFrame(recs)
+
+
+def test_interruptible_cuts_superseded_but_not_deploy():
+    from runners import whatif
+    # пайплайн 1: тест 0–30 мин и выкатка 0–30 мин; пайплайн 2 на той же ветке создан на 9-й минуте
+    g = whatif.prepare(_jobs([(1, "main", "test:a", 0, 30), (1, "main", "deploy:prod", 0, 30), (2, "main", "test:a", 10, 5)]))
+    s = whatif.interruptible_saved(g, "no_deploy").set_index("name").saved_s
+    assert s["deploy:prod"] == 0
+    assert s.loc["test:a"].max() == 21 * 60  # проработал бы до 9-й минуты вместо 30-й
+    assert whatif.interruptible_saved(g, "no_main").saved_s.sum() == 0
+
+
+def test_simulation_fifo_and_interruptible():
+    from runners import whatif
+    g = whatif.prepare(_jobs([(1, "dev", "test:a", 0, 30), (2, "dev", "test:b", 10, 5)]))
+    w, busy = whatif.simulate(g, 1)
+    assert list(w) == [0.0, 20 * 60.0]          # второе ждёт, пока первое доработает
+    w, busy = whatif.simulate(g, 1, "all")
+    # первое стартует в модели сразу по готовности (−1 мин) и прерывается на 9-й: 10 мин + 5 мин второго
+    assert list(w) == [0.0, 0.0] and round(busy * 60) == 15

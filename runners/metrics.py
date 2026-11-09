@@ -104,6 +104,10 @@ def full_weeks(daily):
     return w
 
 
+GROWTH_DAYS = 61   # окно роста: последние 2 месяца, основной рост парка и нагрузки пришёлся на них
+EDGE_WEEKS = 2     # начало и конец окна — среднее за 2 полные недели, чтобы одна провальная неделя не решала
+
+
 def trend(snap):
     s = Section("trend", "Тренд по неделям", "ci_analytics", "")
     if snap.daily is None:
@@ -112,16 +116,22 @@ def trend(snap):
     w = full_weeks(snap.daily)
     s.period = period(w.index.min(), w.index.max() + pd.Timedelta(days=6))
     s.tables["weeks"] = w
+    win = w[w.index >= snap.daily["day"].max() - pd.Timedelta(days=GROWTH_DAYS)]
+    head, tail = win.head(EDGE_WEEKS), win.tail(EDGE_WEEKS)
+    wp = period(win.index.min(), win.index.max() + pd.Timedelta(days=6))
+    span = (f"среднее {head.index[0]:%d.%m}–{head.index[-1] + pd.Timedelta(days=6):%d.%m} → "
+            f"{tail.index[0]:%d.%m}–{tail.index[-1] + pd.Timedelta(days=6):%d.%m}")
     first, last = w.iloc[0], w.iloc[-1]
-    span = f"{w.index[0]:%d.%m} → {w.index[-1]:%d.%m}"
     s.metrics = [
-        Metric("trend.jobs_week_first", f"Заданий за неделю {w.index[0]:%d.%m}", int(first.jobs), "заданий", "ci_analytics", s.period),
+        Metric("trend.jobs_growth", f"Рост заданий в неделю за 2 месяца ({span})", r1(tail.jobs.mean() / head.jobs.mean()), "×", "ci_analytics", wp),
+        Metric("trend.runner_h_growth", f"Рост часов раннеров в неделю за 2 месяца ({span})", r1(tail.runner_h.mean() / head.runner_h.mean()), "×", "ci_analytics", wp),
+        Metric("trend.avg_dur_growth", f"Рост средней длительности задания за 2 месяца ({span})", r1(tail.avg_dur_s.mean() / head.avg_dur_s.mean()), "×", "ci_analytics", wp),
         Metric("trend.jobs_week_last", f"Заданий за неделю {w.index[-1]:%d.%m}", int(last.jobs), "заданий", "ci_analytics", s.period),
-        Metric("trend.jobs_growth", f"Рост заданий в неделю, {span}", r1(last.jobs / first.jobs), "×", "ci_analytics", s.period),
-        Metric("trend.runner_h_growth", f"Рост часов раннеров в неделю, {span}", r1(last.runner_h / first.runner_h), "×", "ci_analytics", s.period),
-        Metric("trend.avg_dur_growth", f"Рост средней длительности задания, {span}", r1(last.avg_dur_s / first.avg_dur_s), "×", "ci_analytics", s.period),
         Metric("trend.runner_h_week_last", f"Часов раннеров за неделю {w.index[-1]:%d.%m}", r1(last.runner_h), "ч", "ci_analytics", s.period),
+        Metric("trend.jobs_growth_all", f"Рост заданий в неделю, {w.index[0]:%d.%m} → {w.index[-1]:%d.%m} (весь период, по одной неделе)", r1(last.jobs / first.jobs), "×", "ci_analytics", s.period),
     ]
+    s.notes.append(f"Рост за 2 месяца: окно с {win.index.min():%d.%m}, края — среднее за {EDGE_WEEKS} полные недели. "
+                   "Считаются только полные недели пн–вс.")
     return s
 
 
@@ -284,6 +294,17 @@ def runners(snap):
         Metric("runners.online", "Раннеров онлайн", int(r.online.fillna(False).astype(bool).sum()), "шт.", "ci_analytics", s.period),
         Metric("runners.busy_h_median", "Занятость раннера, медиана", r1(t.busy_h.median()), "ч", "ci_analytics", s.period),
     ]
+    f = snap.fleet
+    if f is not None and len(f) >= 2:
+        a, b = f.iloc[0], f.iloc[-1]
+        src = " + ".join(sorted({a.source, b.source}))
+        fp = period(a.date, b.date)
+        s.metrics += [
+            Metric("runners.fleet_before", f"Раннеров на {a.date:%d.%m}", int(a.runners), "шт.", a.source, fp),
+            Metric("runners.fleet_growth", f"Рост парка раннеров, {a.date:%d.%m} → {b.date:%d.%m}", r1(b.runners / a.runners), "×", src, fp),
+        ]
+        s.notes.append("Хосты — базовые ноутбуки на 8–16 ядер (со слов владельца). Теги cpu-N/ram-Ng — вероятно, "
+                       "лимиты на задание в Docker executor, а не размер машины (docs/research/inventory.md).")
     return s
 
 
@@ -315,10 +336,13 @@ def quality(snap, sections):
 
 
 def compute(snap):
-    sections = [trend(snap), queue(snap), canceled(snap), classes(snap), top_projects(snap), hot_project(snap), runners(snap)]
+    from runners.whatif import whatif  # whatif использует примитивы этого модуля
+
+    sections = [trend(snap), queue(snap), canceled(snap), classes(snap), top_projects(snap), hot_project(snap),
+                runners(snap), whatif(snap)]
     sections.append(quality(snap, sections))
     return sections
 
 
-KPI = ["trend.jobs_growth", "trend.runner_h_growth", "queue.p95_s", "queue.p99_s",
-       "canceled.before_start_pct", "projects.top_share_pct"]
+KPI = ["trend.jobs_growth", "trend.runner_h_growth", "runners.fleet_growth", "queue.p95_s", "queue.p99_s",
+       "canceled.before_start_pct", "projects.top_share_pct", "whatif.interruptible_saved_pct"]
