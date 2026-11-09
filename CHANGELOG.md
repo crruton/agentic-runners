@@ -31,4 +31,6 @@
 
 ### Removed
 
+- `bench/compact-docker-disk.ps1`: диск сжат напрямую, отдельный скрипт не нужен.
+
 - `collect/snapshot.py`: логика перенесена в `runners/snapshot.py`.
