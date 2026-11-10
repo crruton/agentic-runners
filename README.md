@@ -36,6 +36,7 @@ PYTHONPATH=runtime PYTEST_ADDOPTS="-p agentic_runtime --rt-workers=auto --rt-cac
 - `--rt-workers=N|auto` — воркеры форком от прогретого процесса (Linux): общая память, дешёвый перезапуск; совместим с `PYTEST_XDIST_WORKER`.
 - `--rt-cache=DIR` — пропуск файлов тестов, входы которых не менялись с последнего успешного прогона.
 - `--rt-telemetry` — строки `job-resources:` для снимка `job_resources`.
+- `--rt-select=coverage` — ключ кэша по выполненному коду, а не по импортам через conftest (E09).
 - `--rt-fail-fast` — остановка на первом упавшем тесте; с `--rt-cache` прошлые падения выполняются первыми (E07).
 
 Значения только через «=»: иначе pytest может сдвинуть rootdir. Результаты — E04.

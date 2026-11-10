@@ -23,6 +23,10 @@ def test_broken():
            FF=""; [ "$MODE" != ff_base ] && FF="--rt-fail-fast --rt-cache=/tmp/rt"
            [ "$MODE" = ff_second ] && python -m pytest -q -p agentic_runtime --rt-workers "$N" $FF > /tmp/warm.txt 2>&1 || true
            s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" $FF > /tmp/out.txt 2>&1 || true ;;
+  cov_static|cov_record)
+           # E09: накладные расходы записи покрытия (первый прогон, кэш пуст)
+           SEL=static; [ "$MODE" = cov_record ] && SEL=coverage
+           s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt --rt-select=$SEL > /tmp/out.txt 2>&1 || true ;;
 esac
 e=$(now)
 echo "summary: $(tail -1 /tmp/out.txt)"

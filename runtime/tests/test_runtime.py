@@ -181,3 +181,59 @@ def test_fail_fast_in_fork_mode_stops_all_workers(pytester, monkeypatch):
     pytester.makepyfile(**{k[:-3]: v for k, v in FAIL_LAST.items()})
     r = run(pytester, "--rt-fail-fast", "--rt-workers=2")
     assert counts(r)["failed"] == 1 and r.ret == 1
+
+
+COUPLED = {
+    "app/__init__.py": "",
+    "app/db.py": "def setup():\n    return 'db'\n",
+    "app/m0.py": "def f():\n    return 0\n",
+    "app/m1.py": "def f():\n    return 1\n",
+    "app/m9.py": "C = 9\n",
+    # корневой conftest импортирует весь проект, как у santinel (E08)
+    "conftest.py": "import pytest\nfrom app import db, m0, m1, m9\n\n@pytest.fixture(scope='session')\ndef base():\n    return db.setup()\n",
+    "test_0.py": "from app import m0\ndef test_0(base): assert m0.f() == 0\n",
+    "test_1.py": "from app import m1\ndef test_1(base): assert m1.f() == 1\n",
+    "test_c.py": "from app.m9 import C\ndef test_c(): assert C == 9\n",
+}
+
+
+@pytest.fixture
+def coupled(pytester, monkeypatch):
+    _env(monkeypatch)
+    for path, body in COUPLED.items():
+        p = pytester.path / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    return pytester
+
+
+def _ran(result):
+    o = counts(result)
+    return o.get("passed", 0) + o.get("failed", 0)
+
+
+@pytest.mark.parametrize("mode,changed,expected_runs", [
+    ("coverage", "app/m1.py", 1),   # выполнялся только в test_1
+    ("coverage", "app/m9.py", 1),   # константа импортирована test_c напрямую
+    ("coverage", "app/db.py", 3),   # код сессионной фикстуры — для всех файлов
+    ("static", "app/m1.py", 3),     # статический ключ: conftest импортирует всё
+])
+def test_coverage_selection_beats_conftest_coupling(coupled, mode, changed, expected_runs):
+    cache = str(coupled.path / ".rt")
+    args = (f"--rt-cache={cache}", f"--rt-select={mode}")
+    assert _ran(run(coupled, *args)) == 3
+    assert _ran(run(coupled, *args)) == 0          # ничего не менялось — всё из кэша
+    p = coupled.path / changed
+    p.write_text(p.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    assert _ran(run(coupled, *args)) == expected_runs
+
+
+@needs_fork
+def test_coverage_selection_in_fork_mode(coupled):
+    cache = str(coupled.path / ".rt")
+    args = (f"--rt-cache={cache}", "--rt-select=coverage", "--rt-workers=2")
+    assert _ran(run(coupled, *args)) == 3
+    assert _ran(run(coupled, *args)) == 0
+    p = coupled.path / "app/m0.py"
+    p.write_text(p.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    assert _ran(run(coupled, *args)) == 1

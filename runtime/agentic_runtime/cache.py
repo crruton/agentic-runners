@@ -133,6 +133,23 @@ def file_key(graph, root, test_file, common):
     return h.hexdigest()
 
 
+def file_key_coverage(graph, root, test_file, common, executed):
+    """Ключ по покрытию (H4): замыкание импортов самого файла теста, conftest-файлы без их замыкания
+    и файлы, код которых выполнялся в тестах этого файла в прошлом успешном прогоне.
+
+    Корневой conftest часто импортирует почти весь проект (у santinel — 514 из 521 модуля, E08);
+    здесь он влияет только своим содержимым, а реальная зависимость берётся из выполненного кода.
+    """
+    root_p = Path(root).resolve()
+    files = set(graph.closure(test_file)) | set(_conftests(root, test_file))
+    files |= {(root_p / rel).resolve() for rel in executed if (root_p / rel).is_file()}
+    h = hashlib.sha256(("cov:" + common).encode())
+    for f in sorted(files):
+        h.update(str(f.relative_to(graph.root) if graph.root in f.parents else f).encode())
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()
+
+
 def common_key(root, extra=()):
     h = hashlib.sha256(f"agentic-runtime-cache:{VERSION}:{sys.version}".encode())
     for f in project_files(root, extra):
@@ -150,6 +167,39 @@ class Store:
 
     def hit(self, key):
         return (self.path / f"{key}.ok").exists()
+
+    def _cov_path(self, test_rel):
+        return self.path / "cov" / (hashlib.sha1(test_rel.encode()).hexdigest() + ".json")
+
+    def cov_get(self, test_rel):
+        """Файлы проекта, выполнявшиеся в тестах файла в последнем полностью успешном прогоне."""
+        import json
+        p = self._cov_path(test_rel)
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    def cov_put(self, test_rel, executed):
+        import json
+        p = self._cov_path(test_rel)
+        p.parent.mkdir(exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(executed)), encoding="utf-8")
+        os.replace(tmp, p)
+
+    def setup_put(self, worker, executed):
+        """Файлы, выполнявшиеся на этапе setup фикстур (сессионные фикстуры создаются один раз)."""
+        import json
+        d = self.path / "cov"
+        d.mkdir(exist_ok=True)
+        tmp = d / f"setup-{worker}.tmp"
+        tmp.write_text(json.dumps(sorted(executed)), encoding="utf-8")
+        os.replace(tmp, d / f"setup-{worker}.json")
+
+    def setup_get(self):
+        import json
+        out = set()
+        for f in (self.path / "cov").glob("setup-*.json"):
+            out |= set(json.loads(f.read_text(encoding="utf-8")))
+        return out
 
     def failed(self):
         """Тесты, упавшие в прошлых прогонах (для --rt-fail-fast: они идут первыми)."""
