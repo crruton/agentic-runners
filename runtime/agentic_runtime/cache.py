@@ -151,6 +151,16 @@ class Store:
     def hit(self, key):
         return (self.path / f"{key}.ok").exists()
 
+    def failed(self):
+        """Тесты, упавшие в прошлых прогонах (для --rt-fail-fast: они идут первыми)."""
+        f = self.path / "failed.txt"
+        return set(f.read_text(encoding="utf-8").split("\n")) - {""} if f.exists() else set()
+
+    def put_failed(self, nodeids):
+        tmp = self.path / "failed.txt.tmp"
+        tmp.write_text("\n".join(sorted(nodeids)), encoding="utf-8")
+        os.replace(tmp, self.path / "failed.txt")
+
     def put(self, key, nodeids):
         tmp = self.path / f"{key}.ok.tmp"
         tmp.write_text("\n".join(nodeids), encoding="utf-8")

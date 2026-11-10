@@ -143,3 +143,41 @@ def test_cache_dir_outside_rootdir_hits_on_second_run(suite, tmp_path_factory):
     run(suite, f"--rt-cache={cache}", "-k", "not worker and not fail")
     again = run(suite, f"--rt-cache={cache}", "-k", "not worker and not fail")
     again.stdout.fnmatch_lines(["*по кэшу пропущено 5 тестов в 2 файлах*"])
+
+
+FAIL_LAST = {
+    "test_1.py": "def test_a(): pass\ndef test_b(): pass\n",
+    "test_2.py": "def test_c(): pass\ndef test_d(): pass\n",
+    "test_9.py": "def test_ok(): pass\ndef test_broken(): assert False\n",
+}
+
+
+def test_fail_fast_stops_at_first_failure(pytester, monkeypatch):
+    _env(monkeypatch)
+    pytester.makepyfile(**{k[:-3]: v for k, v in FAIL_LAST.items()})
+    r = run(pytester, "--rt-fail-fast")
+    o = counts(r)
+    assert o["failed"] == 1 and r.ret == 1
+    r.stdout.fnmatch_lines(["*stopping after 1 failures*"])
+
+
+def test_fail_fast_runs_previous_failures_first(pytester, monkeypatch):
+    _env(monkeypatch)
+    pytester.makepyfile(**{k[:-3]: v for k, v in FAIL_LAST.items()})
+    cache = str(pytester.path / ".rt")
+    first = run(pytester, "--rt-fail-fast", f"--rt-cache={cache}")
+    assert counts(first)["passed"] == 5  # падение в последнем файле: до него прошли 5 тестов
+    second = run(pytester, "--rt-fail-fast", f"--rt-cache={cache}", "-v")
+    o = counts(second)
+    assert o["failed"] == 1 and o.get("passed", 0) == 0  # прошлое падение выполнено первым, сессия остановлена
+    second.stdout.fnmatch_lines(["*test_9.py::test_broken FAILED*"])
+    third = run(pytester, "--rt-fail-fast", f"--rt-cache={cache}")
+    assert counts(third)["failed"] == 1 and counts(third).get("passed", 0) == 0  # падение не забыто
+
+
+@needs_fork
+def test_fail_fast_in_fork_mode_stops_all_workers(pytester, monkeypatch):
+    _env(monkeypatch)
+    pytester.makepyfile(**{k[:-3]: v for k, v in FAIL_LAST.items()})
+    r = run(pytester, "--rt-fail-fast", "--rt-workers=2")
+    assert counts(r)["failed"] == 1 and r.ret == 1

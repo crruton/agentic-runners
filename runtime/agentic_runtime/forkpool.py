@@ -138,13 +138,16 @@ def run(session, workers, max_restarts=2):
                         elif kind == "done":
                             w.done = True
                     if session.shouldfail or session.shouldstop:
-                        for other in pool.values():
-                            _kill(other.pid)
+                        _stop_all(pool)  # остановка на первой ошибке: остальные воркеры больше не нужны
+                        break
                     continue
                 # EOF: воркер завершился
                 os.close(fd)
                 del pool[fd]
-                _, status = os.waitpid(w.pid, 0)
+                try:
+                    _, status = os.waitpid(w.pid, 0)
+                except ChildProcessError:  # уже пожат
+                    status = 0
                 if w.done or session.shouldfail or session.shouldstop:
                     continue
                 left = [it for it in w.items if it.nodeid not in w.finished]
@@ -163,6 +166,16 @@ def run(session, workers, max_restarts=2):
             _kill(w.pid)
         gc.unfreeze()
     return restarts
+
+
+def _stop_all(pool):
+    for w in list(pool.values()):
+        _kill(w.pid)
+        try:
+            os.close(w.fd)
+        except OSError:
+            pass
+    pool.clear()
 
 
 def _kill(pid):

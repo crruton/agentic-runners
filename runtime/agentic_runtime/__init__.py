@@ -9,6 +9,7 @@
 - --rt-workers N|auto  прогон форком от прогретого процесса (Linux), общие страницы кода у воркеров
 - --rt-cache DIR       пропуск файлов тестов, чьи входы не менялись с последнего успешного прогона
 - --rt-telemetry       строки job-resources: (cgroup v2, vmstat, PSI) в конце сессии
+- --rt-fail-fast       остановка на первом упавшем тесте; с --rt-cache тесты, падавшие раньше, идут первыми
 """
 
 import os
@@ -31,6 +32,8 @@ def pytest_addoption(parser):
     g.addoption("--rt-cache-extra", action="append", default=[],
                 help="дополнительные glob-входы ключа кэша (миграции, фикстуры-данные), относительно rootdir")
     g.addoption("--rt-telemetry", action="store_true", help="печатать строки job-resources: в конце сессии")
+    g.addoption("--rt-fail-fast", action="store_true",
+                help="остановиться на первом упавшем тесте; с --rt-cache прошлые падения выполняются первыми")
 
 
 class Runtime:
@@ -45,11 +48,20 @@ class Runtime:
         self.keys, self.skipped, self.skipped_files = {}, 0, 0
         self.partial, self.failed_files, self.ran = set(), set(), {}
         self.restarts = 0
+        self.fail_fast = o.rt_fail_fast
+        if self.fail_fast and not o.maxfail:
+            o.maxfail = 1  # агенту для исправления нужна первая ошибка (H1, E06)
+        self.prev_failed = self.store.failed() if self.store else set()
+        self.failed_ids, self.ran_ids, self.promoted = set(), set(), 0
         self.mode = "fork" if self.workers > 1 and hasattr(os, "fork") else "serial"
 
     # --- кэш ----------------------------------------------------------------------
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, session, config, items):
+        self._select_by_cache(config, items)
+        self._failed_first(items)
+
+    def _select_by_cache(self, config, items):
         if not self.store:
             return
         root = str(config.rootpath)
@@ -78,7 +90,22 @@ class Runtime:
             if path not in self.keys:  # отобрано не нами
                 self.partial.add(path)
 
+    def _failed_first(self, items):
+        if not (self.fail_fast and self.prev_failed):
+            return
+        first = [it for it in items if it.nodeid in self.prev_failed]
+        if first:
+            files = {str(it.path) for it in first}
+            same = [it for it in items if it.nodeid not in self.prev_failed and str(it.path) in files]
+            rest = [it for it in items if it.nodeid not in self.prev_failed and str(it.path) not in files]
+            items[:] = first + same + rest
+            self.promoted = len(first)
+
     def pytest_runtest_logreport(self, report):
+        if report.failed:
+            self.failed_ids.add(report.nodeid)
+        if report.when == "teardown":
+            self.ran_ids.add(report.nodeid)
         path = str(report.fspath) if hasattr(report, "fspath") else ""
         full = os.path.join(str(self.config.rootpath), path) if path and not os.path.isabs(path) else path
         if report.failed:
@@ -102,6 +129,8 @@ class Runtime:
     def pytest_sessionfinish(self, session):
         if not self.store:
             return
+        # прошлые падения, которые в этот раз не выполнялись (остановка на первой ошибке), остаются в списке
+        self.store.put_failed(self.failed_ids | (self.prev_failed - self.ran_ids))
         for path, (key, nodeids) in self.keys.items():
             norm = os.path.normcase(os.path.abspath(path))
             if path in self.partial or norm in self.failed_files or self.store.hit(key):

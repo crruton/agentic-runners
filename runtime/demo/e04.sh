@@ -1,5 +1,5 @@
 #!/bin/sh
-# E04 внутри контейнера с лимитами слота. Вариант задаёт MODE (xdist | runtime | cache | partial), воркеров — N.
+# E04 внутри контейнера с лимитами слота. Вариант задаёт MODE (xdist | runtime | cache | partial | ff_base | ff_first | ff_second), воркеров — N.
 # Каждый вариант запускается в своём контейнере, чтобы memory.peak cgroup относился только к нему.
 set -e
 python /work/runtime/demo/make_suite.py /tmp/suite 24 8
@@ -14,6 +14,15 @@ case "$MODE" in
   partial) python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/warm.txt 2>&1 || true
            echo "# changed" >> /tmp/suite/test_mod00.py
            s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/out.txt 2>&1 || true ;;
+  ff_base|ff_first|ff_second)
+           # H1 (E07): падение в последнем файле набора
+           printf '
+def test_broken():
+    assert False
+' >> /tmp/suite/test_mod23.py
+           FF=""; [ "$MODE" != ff_base ] && FF="--rt-fail-fast --rt-cache=/tmp/rt"
+           [ "$MODE" = ff_second ] && python -m pytest -q -p agentic_runtime --rt-workers "$N" $FF > /tmp/warm.txt 2>&1 || true
+           s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" $FF > /tmp/out.txt 2>&1 || true ;;
 esac
 e=$(now)
 echo "summary: $(tail -1 /tmp/out.txt)"

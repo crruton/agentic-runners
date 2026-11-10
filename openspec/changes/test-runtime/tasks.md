@@ -17,3 +17,8 @@
 
 - [x] 3.1 CHANGELOG, README, `runners all`, `openspec validate`
 - [x] 3.2 Коммит, push в GitLab и GitHub, обновить MR
+
+## 4. H1 в рантайме
+
+- [x] 4.1 `--rt-fail-fast`: остановка на первой ошибке, прошлые падения первыми, тесты
+- [x] 4.2 E07: замер на демо-наборе
