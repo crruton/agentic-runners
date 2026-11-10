@@ -1,0 +1,23 @@
+#!/bin/sh
+# E04 внутри контейнера с лимитами слота. Вариант задаёт MODE (xdist | runtime | cache | partial), воркеров — N.
+# Каждый вариант запускается в своём контейнере, чтобы memory.peak cgroup относился только к нему.
+set -e
+python /work/runtime/demo/make_suite.py /tmp/suite 24 8
+cd /tmp/suite
+export PYTHONPATH=/work/runtime
+now() { python -c 'import time; print(time.time())'; }
+case "$MODE" in
+  xdist)   s=$(now); python -m pytest -q -n "$N" > /tmp/out.txt 2>&1 || true ;;
+  runtime) s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" > /tmp/out.txt 2>&1 || true ;;
+  cache)   python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/warm.txt 2>&1 || true
+           s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/out.txt 2>&1 || true ;;
+  partial) python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/warm.txt 2>&1 || true
+           echo "# changed" >> /tmp/suite/test_mod00.py
+           s=$(now); python -m pytest -q -p agentic_runtime --rt-workers "$N" --rt-cache=/tmp/rt > /tmp/out.txt 2>&1 || true ;;
+esac
+e=$(now)
+echo "summary: $(tail -1 /tmp/out.txt)"
+grep "по кэшу" /tmp/out.txt || true
+python -c "print('wall_s:', round($e - $s, 1))"
+echo "mem_peak_mib: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 ))"
+echo "events: $(grep -E '^(oom_kill|max) ' /sys/fs/cgroup/memory.events | tr '\n' ' ')"

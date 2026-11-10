@@ -25,6 +25,20 @@ python -m pytest -q tests
 
 Числа для доклада берутся из `docs/talk/numbers.md` (генерируется из `out/metrics.json`). Процесс по уровням — `docs/process.md`.
 
+## Тестовый рантайм (`runtime/`)
+
+pytest-плагин, который подключается снаружи проекта, без правок в его репозитории (ADR-0005):
+
+```
+PYTHONPATH=runtime PYTEST_ADDOPTS="-p agentic_runtime --rt-workers=auto --rt-cache=/cache/rt --rt-telemetry" pytest
+```
+
+- `--rt-workers=N|auto` — воркеры форком от прогретого процесса (Linux): общая память, дешёвый перезапуск; совместим с `PYTEST_XDIST_WORKER`.
+- `--rt-cache=DIR` — пропуск файлов тестов, входы которых не менялись с последнего успешного прогона.
+- `--rt-telemetry` — строки `job-resources:` для снимка `job_resources`.
+
+Значения только через «=»: иначе pytest может сдвинуть rootdir. Результаты — E04.
+
 ## Где что лежит
 
 | Путь | Что там |
