@@ -27,6 +27,14 @@ def main(argv=None):
     b.add_argument("--only", help="сценарии через запятую, по умолчанию все")
     b.add_argument("--root", default="data/bench")
     b.add_argument("--resume", help="каталог прогона YYYYMMDD-HHMM: досчитать недостающие сценарии")
+    af = sub.add_parser("affected", help="доля тестового времени на каждое изменение по истории git (H4, H10)")
+    af.add_argument("--repo", required=True, help="локальный клон проекта (только чтение)")
+    af.add_argument("--since", required=True, help="дата начала истории, YYYY-MM-DD")
+    af.add_argument("--weights", action="append", required=True, help="JSON с секундами файлов тестов")
+    af.add_argument("--invalidate", action="append", default=[], help="glob: изменение затрагивает все тесты")
+    af.add_argument("--suite", action="append", default=[], help="префикс_тестов=glob, например tests/dbt/=dbt/*")
+    af.add_argument("--per-commit", action="store_true", help="по каждому коммиту, а не по влитым изменениям")
+    af.add_argument("--out", help="CSV с результатом по коммитам")
     sub.add_parser("numbers", help="docs/talk/numbers.md из out/metrics.json")
     sub.add_parser("check", help="ссылки на показатели в docs/ существуют, numbers.md свежий")
     a = sub.add_parser("all", help="report + numbers + check: весь офлайн-процесс одной командой")
@@ -34,6 +42,19 @@ def main(argv=None):
     a.add_argument("--snapshot")
 
     args = ap.parse_args(argv)
+    if args.cmd == "affected":
+        from runners import affected
+        suites = {}
+        for s in args.suite:
+            prefix, _, glob = s.partition("=")
+            suites.setdefault(prefix, []).append(glob)
+        rules = {"invalidate": args.invalidate, "suites": suites, "references": True}
+        df = affected.analyze(args.repo, args.since, affected.load_weights(args.weights), rules,
+                              first_parent=not args.per_commit)
+        if args.out:
+            df.to_csv(args.out, index=False)
+        print(affected.summary(df))
+        return
     if args.cmd == "bench":
         from runners import bench
         bench.run(args.only.split(",") if args.only else None, args.root, args.resume)
