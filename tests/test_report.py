@@ -252,3 +252,19 @@ def test_h1_and_h3_rules():
     snap = SimpleNamespace(gitlab=g, pipelines=pd.DataFrame({"pipeline_id": range(1, 6), "source": "push"}), jobs=None)
     r = H.h3_breaker(snap)
     assert round(r["saved_h"] * 3600) == 2 * 1200 and r["risk"].startswith("в 0 из 2")
+
+
+def test_pilot_kpis():
+    import pandas as pd
+    from types import SimpleNamespace
+    from runners import pilot
+    t = lambda m: pd.Timestamp("2026-11-01T10:00:00Z") + pd.Timedelta(minutes=m)
+    rows = []
+    for p, statuses in enumerate([["failed"], ["failed"], ["success"], ["failed", "success"]]):
+        for k, st in enumerate(statuses):
+            rows.append(dict(job_id=p * 10 + k, pipeline_id=p, project="x", status=st, allow_failure=False,
+                             created_at=t(p * 60), finished_at=t(p * 60 + 30), duration_s=1800.0))
+    rows.append(dict(job_id=99, pipeline_id=2, project="x", status="failed", allow_failure=True,
+                     created_at=t(120), finished_at=t(150), duration_s=60.0))
+    k = pilot.kpis(SimpleNamespace(jobs=pd.DataFrame(rows)), "x")
+    assert k["red_pipelines_pct"] == 75.0 and k["max_red_streak"] == 2  # allow_failure в пайплайне 2 не красит его

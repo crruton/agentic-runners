@@ -35,6 +35,10 @@ def main(argv=None):
     af.add_argument("--suite", action="append", default=[], help="префикс_тестов=glob, например tests/dbt/=dbt/*")
     af.add_argument("--per-commit", action="store_true", help="по каждому коммиту, а не по влитым изменениям")
     af.add_argument("--out", help="CSV с результатом по коммитам")
+    pl = sub.add_parser("pilot", help="показатели проектов для пилота ci-preflight по снимку БД")
+    pl.add_argument("projects", nargs="+", help="пути проектов, например denis.golovko/lad")
+    pl.add_argument("--root", default="data/snapshots")
+    pl.add_argument("--snapshot", help="YYYYMMDD, по умолчанию последний")
     sub.add_parser("numbers", help="docs/talk/numbers.md из out/metrics.json")
     sub.add_parser("check", help="ссылки на показатели в docs/ существуют, numbers.md свежий")
     a = sub.add_parser("all", help="report + numbers + check: весь офлайн-процесс одной командой")
@@ -42,6 +46,13 @@ def main(argv=None):
     a.add_argument("--snapshot")
 
     args = ap.parse_args(argv)
+    if args.cmd == "pilot":
+        import pandas as pd
+        from runners import pilot
+        from runners.load import load
+        pd.set_option("display.width", 200)
+        print(pilot.table(load(args.root, args.snapshot, bench=None), args.projects).to_string())
+        return
     if args.cmd == "affected":
         from runners import affected
         suites = {}
