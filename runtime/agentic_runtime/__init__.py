@@ -62,6 +62,7 @@ class Runtime:
         self.cov, self.cov_seen, self.cov_bad, self.per_file = {}, {}, set(), {}
         self.setup_prev = self.store.setup_get() if self.coverage else set()
         self.setup_now, self.target = set(), [None]  # target[0] — куда пишет профайлер
+        self.recorder = None
         xdist = (getattr(o, "numprocesses", None) or getattr(o, "dist", "no") not in (None, "no")
                  or hasattr(config, "workerinput"))  # контроллер xdist или его воркер
         # при pytest-xdist (-n) параллелит xdist, рантайм даёт только кэш, порядок и остановку на ошибке
@@ -128,14 +129,13 @@ class Runtime:
             for it in item.session.items:
                 self.per_file[str(it.path)] = self.per_file.get(str(it.path), 0) + 1
         self.target[0] = self.cov.setdefault(path, set())
-        prof = _profiler(self.root, self.target)
-        sys.setprofile(prof)
-        threading.setprofile(prof)
+        rec = self.recorder or _Recorder(self.root, self.target)
+        self.recorder = rec
+        rec.start()
         try:
             yield
         finally:
-            sys.setprofile(None)
-            threading.setprofile(None)
+            rec.stop()
         self.cov_seen[path] = self.cov_seen.get(path, 0) + 1
         if self.cov_seen[path] == self.per_file.get(path) and path not in self.cov_bad:
             rel = _rel(self.root, path)
@@ -217,6 +217,56 @@ def _rel(root, path):
         return os.path.relpath(path, root).replace(os.sep, "/")
     except ValueError:  # другой диск на Windows
         return str(path)
+
+
+class _Recorder:
+    """Запись файлов проекта, чей код выполнялся.
+
+    Python 3.12+: sys.monitoring, событие PY_START; после первой записи функция отключается (DISABLE),
+    в начале каждого теста события включаются заново (restart_events) — почти без накладных расходов.
+    Старше или идентификатор инструмента занят (например, coverage.py): профайлер вызовов sys.setprofile.
+    """
+
+    TOOL = 4  # свободный идентификатор: 0 — отладчик, 1 — coverage, 2 — профайлер, 5 — оптимизатор
+
+    def __init__(self, root, target):
+        self.root, self.target = os.path.normcase(os.path.abspath(root)), target
+        self.mon = None
+        m = getattr(sys, "monitoring", None)
+        if m is not None:
+            try:
+                m.use_tool_id(self.TOOL, "agentic-runtime")
+                m.register_callback(self.TOOL, m.events.PY_START, self._on_start)
+                self.mon = m
+            except ValueError:  # идентификатор занят
+                self.mon = None
+        self.prof = None if self.mon else _profiler(root, target)
+
+    def _on_start(self, code, offset):
+        f = code.co_filename
+        sink = self.target[0]
+        if f not in sink and os.path.normcase(f).startswith(self.root):
+            sink.add(f)
+        return self.mon.DISABLE
+
+    def start(self):
+        if self.mon:
+            self.mon.set_events(self.TOOL, self.mon.events.PY_START)
+            self.mon.restart_events()
+        else:
+            sys.setprofile(self.prof)
+            threading.setprofile(self.prof)
+
+    def stop(self):
+        if self.mon:
+            self.mon.set_events(self.TOOL, 0)
+        else:
+            sys.setprofile(None)
+            threading.setprofile(None)
+
+    @property
+    def kind(self):
+        return "sys.monitoring" if self.mon else "setprofile"
 
 
 def _profiler(root, target):
