@@ -6,13 +6,13 @@
 
 ```
 python -m runners affected --repo <клон santinel> --since 2026-10-11 \
-  --weights infra/ci/pytest-file-durations.json --weights infra/ci/dbt-file-durations.json \
+  --weights <клон>/infra/ci/pytest-file-durations.json --weights <клон>/infra/ci/dbt-file-durations.json \
   --invalidate "pyproject.toml" --invalidate "requirements*.txt" --invalidate "uv.lock" --invalidate "setup.cfg" \
   --invalidate "pytest.ini" --invalidate "alembic.ini" --invalidate "docker-compose.test.yml" --invalidate "migrations/*" \
   --suite "tests/dbt/=dbt/*" [--per-commit]
 ```
 
-Пути `--weights` — относительно клона. Правила — в `runners/affected.py`, тесты правил — `tests/test_affected.py`.
+Правила — в `runners/affected.py`, тесты правил — `tests/test_affected.py`.
 
 ## Правила
 
