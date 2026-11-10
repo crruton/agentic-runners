@@ -20,7 +20,7 @@ import pytest
 from agentic_runtime import cache as _cache
 from agentic_runtime import telemetry as _telemetry
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def pytest_addoption(parser):
