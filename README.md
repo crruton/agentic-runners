@@ -45,6 +45,10 @@ PYTHONPATH=runtime PYTEST_ADDOPTS="-p agentic_runtime --rt-workers=auto --rt-cac
 
 `ci-templates/agentic-ci.yml` — остановка на первой ошибке и полный набор тестов один раз в поезде слияния (ADR-0006). Подключение — `ci-templates/README.md`.
 
+## Для администратора раннеров
+
+`handover/ansible-runners.md` — изменения в Ansible раннеров и тегах с основаниями, проверкой и откатом. В репозиторий раннеров отсюда ничего не пушится.
+
 ## Где что лежит
 
 | Путь | Что там |
