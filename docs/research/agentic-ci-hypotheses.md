@@ -15,11 +15,42 @@
 | H7 | **Две полосы и ночь для тяжёлого** | Быстрая полоса для обратной связи агенту (линт и затронутые тесты) на ноутбуках; полные наборы — пакетами через merge train и ночью на buran | 30,6% часов уже ночью; пакетирование у Uber дало −53% ресурсов | модель очереди из E01 с двумя пулами | теги раннеров, CI-шаблон |
 | H8 | **Бюджет CI на MR, видимый агенту** | Агент видит, сколько раундов CI у задачи осталось; после бюджета пайплайн запускается только по запросу | ограничивает хвост серий (H3) экономически | replay: распределение раундов на MR | харнес |
 
+## Что делают на GitHub (обзор 10.11.2026)
+
+Звёзды и даты — по GitHub API на 10.11.2026.
+
+| Подход | Репозиторий / продукт | Что делает | Что берём |
+|---|---|---|---|
+| Окружение агента готовится один раз | GitHub Copilot coding agent, `copilot-setup-steps.yml` | Зависимости ставятся в отдельном job до начала работы агента; агент сам гоняет тесты в этом окружении | Окружение на задачу, а не на задание CI (H11) |
+| Изолированное окружение на агента | `dagger/container-use` (4,1 тыс. звёзд) | Каждый агент — свой контейнер и своя git-ветка, работает как MCP-сервер | Песочница агента как место для «предполётной» проверки (H2) |
+| Локальная очередь слияния для параллельных агентов | `funador/claude-code-merge-queue` | FIFO-очередь слияния на машине; pre-push хук гоняет проверку; прямой push запрещён; сборки сериализуются локом | Агенты сливают изменения через свою очередь, общий CI видит уже проверенное (H9) |
+| Спекулятивная очередь слияния | `uber/submitqueue` (открыт, активно развивается) | Проверяет пачку изменений против предсказанных состояний HEAD, изолирует упавшее; у Uber −53% ресурсов CI | Пакетная проверка MR агентов (H12) |
+| Лёгкое на PR, тяжёлое в очереди | GitHub merge queue, событие `merge_group` | На PR — линт и юнит-тесты, полный набор — только в очереди слияния | В GitLab — merge train: тяжёлое только в пайплайне поезда (H10) |
+| Выбор затронутых тестов | `tarpas/pytest-testmon` (1 тыс. звёзд) | Карта зависимостей тестов от кода; запускает только затронутые, «правильные первыми» | Выбор по покрытию поверх кэша рантайма (H4) |
+| Кэш и удалённое исполнение | `TraceMachina/nativelink` (1,6 тыс. звёзд), `buildbuddy-io/buildbuddy`, `buildfarm/buildfarm` | Content-addressed кэш результатов и удалённое исполнение (протокол Bazel REAPI) | Общий кэш сборок образов вместо сборки через `docker.sock` в каждом задании (H13) |
+| Эфемерные раннеры в microVM | `hostinger/fireactions`, `runs-on/runs-on`, `actions/actions-runner-controller` (6,6 тыс. звёзд) | Пулы раннеров, ВМ на задание, автоскейл | Пулы раннеров по классам, buran в Kubernetes (H7) |
+| Снимки прогретых раннеров | BuildBuddy (snapshot/clone раннеров), Firecracker snapshotting | Один прогрев, дальше клонирование памяти ВМ | Тёплый тестовый сервер (H5) |
+| Тонкие клоны БД | `postgres-ai/database-lab-engine` (2,8 тыс. звёзд), `neondatabase/neon` | Copy-on-write клоны Postgres за секунды | Шаблон БД на задание вместо миграций с нуля (H5) |
+| Пользовательский OOM по давлению памяти | `hakavlad/nohang`, systemd-oomd | Реакция на PSI до вмешательства ядерного OOM-killer | Допуск заданий по PSI (H6) |
+| Агенты в Actions | GitHub Agentic Workflows (`gh aw`) | Агенты как workflow; GitHub прямо говорит, что они не заменяют детерминированный CI | Граница: агент — потребитель CI, а не его замена |
+
+Эмпирика по GitHub: исследование 208 843 CI-прогонов от PR пяти агентов (2 355 репозиториев) — успешность от 64,9% до 94,4% в зависимости от агента и отрицательная корреляция частоты агентных PR в репозитории с успешностью CI (ρ = −0,34). То же видим у нас: чем активнее агент в проекте без защиты, тем длиннее красные серии (E05).
+
+## Новые гипотезы по итогам обзора GitHub
+
+| # | Гипотеза | Что меняем | Оценка | Как проверим | Где живёт |
+|---|---|---|---|---|---|
+| H9 | **Агенты сливают через свою очередь** | Локальная очередь слияния на машине агента: pre-push проверка рантаймом, прямой push в общую ветку запрещён, тяжёлые сборки сериализуются | общий CI получает только проверенные изменения; вместе с H2 бьёт по 50% часов красных пайплайнов | пилот на одном проекте, красные пайплайны до и после | харнес (skill) |
+| H10 | **Тяжёлое — только в поезде слияния** | На MR — линт и затронутые тесты; полный набор — один раз в merge train, а не на каждый из 6,4 пушей в ветку | кратное сокращение полных прогонов на MR | replay: сколько полных прогонов на MR сейчас и сколько было бы | CI-шаблон для проектов |
+| H11 | **Окружение на задачу агента, а не на задание CI** | Как `copilot-setup-steps`: окружение агента (зависимости, шаблон БД) готовится один раз на задачу, все внутренние прогоны — там | убирает подготовку окружения из десятков заданий на задачу | пилот харнеса на одном проекте | харнес, песочница агента |
+| H12 | **Пакетная спекулятивная проверка MR** | MR агентов проверяются пачкой против предсказанного HEAD, упавшее изолируется бисекцией | у Uber −53% ресурсов CI | replay очереди MR по E05 с пакетами 2/4/8 | merge train или SubmitQueue |
+| H13 | **Общий кэш сборок вместо сборки через `docker.sock`** | Сборки образов сейчас идут через dockerd хоста, вне лимитов и без общего кэша; переносим на общий кэш BuildKit или REAPI | класс build — 6,5% часов, плюс работа вне учёта лимитов | доля времени сборок по логам, повторяемость слоёв | Ansible раннеров |
+
 ## Порядок проверки
 
-1. Офлайн, без чужих прав: H1 и H3 (replay по готовым данным), H2 (классификация падений), H6 (эмуляция на готовом стенде).
+1. Офлайн, без чужих прав: H1, H3, H10 и H12 (replay по готовым данным), H2 (классификация падений), H6 (эмуляция на готовом стенде), H13 (доля сборок по логам).
 2. На копии тестов santinel: H4 и H5.
-3. На проде, после прав на Ansible раннеров: H6 и H7; через skill — H2, H3 и H8.
+3. На проде, после прав на Ansible раннеров: H6, H7 и H13; через skill — H2, H3, H8, H9 и H11; через CI-шаблон — H10.
 
 ## Источники
 
@@ -37,3 +68,9 @@
 - Ветвление Postgres copy-on-write — https://www.databricks.com/blog/lakebase-branching-cicd-lessons-100-pr-databases ; Database Lab Engine — https://github.com/nagyist/postgresai-database-lab-engine
 - Стоимость ретраев агентов, «не больше 2 раундов CI на PR» — https://visdom-maturity-matrix.virtuslab.com/guides/delivery/max-2-ci-rounds-per-pr-stripe-benchmark ; https://devops.com/the-anatomy-of-a-900000-validation-bill/
 - CRIU / CRaC для прогретого старта — https://foojay.io/today/how-we-developed-the-eclipse-openj9-criu-support-for-fast-java-startup/
+- Reliability of AI Bots Footprints in GitHub Actions CI/CD Workflows (208 843 прогона) — https://arxiv.org/pdf/2604.18334
+- When AI Agents Touch CI/CD Configurations — https://arxiv.org/html/2601.17413v1
+- Copilot coding agent, настройка окружения — https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/customize-the-agent-environment
+- GitHub Agentic Workflows — https://github.github.com/gh-aw/ ; https://github.blog/ai-and-ml/github-copilot/automate-repository-tasks-with-github-agentic-workflows/
+- GitHub merge queue и `merge_group` — https://docs.github.com/en/enterprise-server@3.19/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue ; https://mergify.com/blog/enable-github-merge-queue-actions-setup
+- Репозитории: https://github.com/dagger/container-use ; https://github.com/funador/claude-code-merge-queue ; https://github.com/uber/submitqueue ; https://github.com/tarpas/pytest-testmon ; https://github.com/TraceMachina/nativelink ; https://github.com/buildbuddy-io/buildbuddy ; https://github.com/hostinger/fireactions ; https://github.com/actions/actions-runner-controller ; https://github.com/runs-on/runs-on ; https://github.com/postgres-ai/database-lab-engine ; https://github.com/hakavlad/nohang
