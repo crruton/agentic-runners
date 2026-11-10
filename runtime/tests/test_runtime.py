@@ -237,3 +237,11 @@ def test_coverage_selection_in_fork_mode(coupled):
     p = coupled.path / "app/m0.py"
     p.write_text(p.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
     assert _ran(run(coupled, *args)) == 1
+
+
+def test_runtime_steps_aside_for_xdist(suite):
+    pytest.importorskip("xdist")
+    r = run(suite, "-n", "2", "--rt-workers=2", "-k", "not worker")
+    o = counts(r)
+    assert o["passed"] == 5 and o["failed"] == 1
+    r.stdout.fnmatch_lines(["*режим serial*"])  # параллелит xdist, рантайм не форкает поверх него

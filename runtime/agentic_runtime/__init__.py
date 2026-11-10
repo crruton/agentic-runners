@@ -62,7 +62,10 @@ class Runtime:
         self.cov, self.cov_seen, self.cov_bad, self.per_file = {}, {}, set(), {}
         self.setup_prev = self.store.setup_get() if self.coverage else set()
         self.setup_now, self.target = set(), [None]  # target[0] — куда пишет профайлер
-        self.mode = "fork" if self.workers > 1 and hasattr(os, "fork") else "serial"
+        xdist = (getattr(o, "numprocesses", None) or getattr(o, "dist", "no") not in (None, "no")
+                 or hasattr(config, "workerinput"))  # контроллер xdist или его воркер
+        # при pytest-xdist (-n) параллелит xdist, рантайм даёт только кэш, порядок и остановку на ошибке
+        self.mode = "fork" if self.workers > 1 and hasattr(os, "fork") and not xdist else "serial"
 
     # --- кэш ----------------------------------------------------------------------
     @pytest.hookimpl(trylast=True)

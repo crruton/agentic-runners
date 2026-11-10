@@ -41,6 +41,10 @@ PYTHONPATH=runtime PYTEST_ADDOPTS="-p agentic_runtime --rt-workers=auto --rt-cac
 
 Значения только через «=»: иначе pytest может сдвинуть rootdir. Результаты — E04.
 
+## CI-шаблон для проектов
+
+`ci-templates/agentic-ci.yml` — остановка на первой ошибке и полный набор тестов один раз в поезде слияния (ADR-0006). Подключение — `ci-templates/README.md`.
+
 ## Где что лежит
 
 | Путь | Что там |

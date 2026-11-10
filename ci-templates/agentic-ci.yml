@@ -1,0 +1,43 @@
+# CI для агентной разработки: H1 (остановка на первой ошибке) и H10 (полный набор — один раз, в поезде слияния).
+# Решения — ADR-0005, ADR-0006; оценки — docs/experiments/E06, E08, E09. Подключение и пример — ci-templates/README.md.
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible  # новый пуш снимает устаревшие задания
+    on_job_failure: all           # первое упавшее задание снимает весь пайплайн (H1)
+
+default:
+  interruptible: true
+
+variables:
+  AGENTIC_RUNTIME_PIP: "agentic-runtime @ git+https://gitlab.raftds.com/architects/agentic-runners.git#subdirectory=runtime"
+
+.agentic-runtime:
+  before_script:
+    - pip install -q "$AGENTIC_RUNTIME_PIP"
+
+# Тесты на MR: только затронутые файлы, прошлые падения первыми, остановка на первой ошибке.
+# Кэш результатов живёт в кэше CI ветки MR и на проверку перед слиянием не влияет.
+.agentic-mr-tests:
+  extends: .agentic-runtime
+  variables:
+    PYTEST_ADDOPTS: "-p agentic_runtime --rt-workers=auto --rt-cache=$CI_PROJECT_DIR/.rt-cache --rt-select=coverage --rt-fail-fast --rt-telemetry"
+  cache:
+    key: "agentic-rt-$CI_MERGE_REQUEST_IID-$CI_JOB_NAME"
+    paths: [.rt-cache/]
+    when: always
+  rules:
+    - if: $CI_MERGE_REQUEST_EVENT_TYPE == "merge_train"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "true"
+      when: never                 # Draft-MR: только линт
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Полный набор: в поезде слияния и на основной ветке, без кэша результатов — каждый тест выполняется.
+.agentic-full-tests:
+  extends: .agentic-runtime
+  variables:
+    PYTEST_ADDOPTS: "-p agentic_runtime --rt-workers=auto --rt-telemetry"
+  rules:
+    - if: $CI_MERGE_REQUEST_EVENT_TYPE == "merge_train"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
