@@ -210,6 +210,10 @@ def machine():
 
 def run(names=None, root="data/bench", resume=None):
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # образы, которых не было до прогона, бенч удалит за собой; чужие (уже скачанные владельцем) не трогает
+    pulled = [img for img in (IMAGE, PG_IMAGE, HELPER)
+              if subprocess.run(["docker", "image", "inspect", img], capture_output=True).returncode != 0]
+    cache_was_empty = "0B" in sh("docker", "system", "df", "--format", "{{.Type}}={{.Size}}", check=False).split("Build Cache=")[-1][:3]
     sh("docker", "build", "-q", "-t", IMAGE, os.path.join(here, "bench"))
     for img in (PG_IMAGE, HELPER):
         sh("docker", "pull", "-q", img)
@@ -234,5 +238,9 @@ def run(names=None, root="data/bench", resume=None):
     finally:
         cleanup()
         cg_exec(f"rmdir /cg/{CG} 2>/dev/null || true")
+        if pulled:
+            sh("docker", "rmi", *pulled, check=False)
+        if cache_was_empty:  # кэш сборки до прогона был пуст — весь он от бенча
+            sh("docker", "builder", "prune", "-af", check=False)
     print(out)
     return out
