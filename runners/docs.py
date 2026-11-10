@@ -13,11 +13,11 @@ import re
 from runners.metrics import Metric
 from runners.report import fmt_value
 
-PREFIXES = ("trend", "queue", "canceled", "classes", "projects", "hot", "runners", "whatif", "cgroup", "bench", "quality")
+PREFIXES = ("trend", "queue", "canceled", "classes", "projects", "hot", "runners", "whatif", "cgroup", "bench", "hyp", "quality")
 REF = re.compile(r"`((?:%s)\.[a-z0-9_-]+)`" % "|".join(PREFIXES))
 TITLES = {"trend": "Рост", "queue": "Очередь", "canceled": "Отмены до старта", "classes": "Классы заданий",
           "projects": "Проекты", "hot": "Главный проект", "runners": "Парк раннеров",
-          "cgroup": "Ресурсы задания (cgroup)", "bench": "Эмуляция A/B", "whatif": "Что если (replay)", "quality": "Качество данных"}
+          "cgroup": "Ресурсы задания (cgroup)", "bench": "Эмуляция A/B", "hyp": "Гипотезы (офлайн-оценка)", "whatif": "Что если (replay)", "quality": "Качество данных"}
 
 
 def _metrics(path):

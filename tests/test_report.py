@@ -64,7 +64,7 @@ def test_missing_gitlab_marks_sections(tmp_path):
     root = tmp_path / "snapshots"
     make_snapshot(str(root), with_gitlab=False)
     html, _ = _build(str(root), tmp_path / "out")
-    assert html.count("Нет данных в снимке") == 7  # queue, canceled, classes, hot, whatif + cgroup и bench (нет в фикстуре)
+    assert html.count("Нет данных в снимке") == 8  # queue, canceled, classes, hot, whatif + cgroup, bench, hyp (нет в фикстуре)
     assert '<section id="trend">' in html and "Нет данных" not in html.split('<section id="queue">')[0]
 
 
@@ -225,3 +225,30 @@ def test_bench_workers_rule_matches_santinel_readme():
     assert workers_for("budget1100", "pytest", 4, 4096) == 3   # старая формула давала N=3 на 4 GiB
     assert workers_for("budget1600", "dbt", 4, 4096) == 4
     assert ncpus("0-3") == 4 and ncpus("0-7") == 8 and ncpus("0,2-3") == 3
+
+
+def test_h1_and_h3_rules():
+    import pandas as pd
+    from types import SimpleNamespace
+    from runners import hypotheses as H
+    t = lambda m: pd.Timestamp("2026-11-01T10:00:00Z") + pd.Timedelta(minutes=m)
+    # пайплайн 1: задание падает на 10-й минуте; второе стартует на 12-й (сэкономлено целиком, 20 мин),
+    # третье идёт 5–25 (сэкономлено 15 мин); allow_failure-падение на 2-й минуте не считается
+    jobs = pd.DataFrame([
+        dict(job_id=1, pipeline_id=1, status="failed", allow_failure=False, started_at=t(0), finished_at=t(10), duration_s=600),
+        dict(job_id=2, pipeline_id=1, status="success", allow_failure=False, started_at=t(12), finished_at=t(32), duration_s=1200),
+        dict(job_id=3, pipeline_id=1, status="success", allow_failure=False, started_at=t(5), finished_at=t(25), duration_s=1200),
+        dict(job_id=4, pipeline_id=1, status="failed", allow_failure=True, started_at=t(0), finished_at=t(2), duration_s=120),
+    ])
+    r = H.h1_fail_fast(SimpleNamespace(jobs=jobs))
+    assert round(r["saved_h"] * 60) == 35
+    # H3: 5 красных пайплайнов подряд на ветке; в 4-м и 5-м выполнялись бы только линт и прошлое падение
+    rows = []
+    for p in range(1, 6):
+        for name, status, dur in (("lint", "success", 60), ("test:a", "failed", 600), ("test:b", "success", 1200)):
+            rows.append(dict(project="x", ref="feat", pipeline_id=p, job_id=p * 10 + len(rows), name=name, status=status,
+                             created_at=t(p * 30), duration_s=dur, failure_reason="script_failure"))
+    g = pd.DataFrame(rows)
+    snap = SimpleNamespace(gitlab=g, pipelines=pd.DataFrame({"pipeline_id": range(1, 6), "source": "push"}), jobs=None)
+    r = H.h3_breaker(snap)
+    assert round(r["saved_h"] * 3600) == 2 * 1200 and r["risk"].startswith("в 0 из 2")

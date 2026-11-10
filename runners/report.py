@@ -113,6 +113,10 @@ def _charts(sec):
         out += ["<h3>Время на 2 пайплайна (12 шардов), с</h3>",
                 charts.hbars([f"{n} · {row.title}" for n, row in sc.iterrows()], sc.makespan_s, "с",
                              {i for i, n in enumerate(sc.index) if n == "A-now"})]
+    elif sec.id == "hyp":
+        h = t["hypotheses"]
+        out += ["<h3>Оценка экономии часов раннеров, % (отрицательное — дороже)</h3>",
+                charts.hbars(list(h.hyp), h.saved_pct.clip(lower=0), "%")]
     elif sec.id == "runners":
         r = t["runners"].dropna(subset=["busy_h"])
         lab = [f"#{i} · {row.cpu} · {row.ram}" for i, row in r.iterrows()]

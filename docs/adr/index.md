@@ -7,3 +7,4 @@
 | [ADR-0003](ADR-0003-telemetry-from-job-logs.md) | APPROVED | Телеметрия ядра из строк `job-resources:` в логах заданий вместо Grafana | `runners/resources.py`, `runners/snapshot.py`, `docs/experiments/**` |
 | [ADR-0004](ADR-0004-emulated-runner-ab.md) | APPROVED | A/B конфигураций раннера на эмулированном ноутбуке (cgroup v2 в Docker Desktop) | `bench/**`, `runners/bench.py`, `docs/experiments/E03-*` |
 | [ADR-0005](ADR-0005-platform-test-runtime.md) | APPROVED | Раннеры разгружаем тестовым рантаймом (форк от прогретого процесса, кэш результатов, телеметрия), а не размером раннеров | `runtime/**`, `docs/experiments/E04-*` |
+| [ADR-0006](ADR-0006-rollout-order.md) | APPROVED | Порядок внедрения: H1 → харнес (H2, H9, H11) → H10; пакетирование и PSI-допуск отложены | `docs/plan.md`, `docs/research/agentic-ci-hypotheses.md` |

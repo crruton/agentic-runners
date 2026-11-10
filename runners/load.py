@@ -66,10 +66,13 @@ def _jobs(rows):
             "queued_s": d.get("queued_duration"),
             "duration_s": d.get("duration"),
             "created_at": d.get("created_at"),
+            "started_at": d.get("started_at"),
             "finished_at": d.get("finished_at"),
+            "pipeline_id": (d.get("pipeline") or {}).get("id"),
+            "allow_failure": bool(d.get("allow_failure")),
         })
     df = pd.DataFrame(recs)
-    for c in ("created_at", "finished_at"):
+    for c in ("created_at", "started_at", "finished_at"):
         df[c] = pd.to_datetime(df[c], utc=True, format="ISO8601")
     return df
 

@@ -336,10 +336,11 @@ def quality(snap, sections):
 
 
 def compute(snap):
+    from runners.hypotheses import evaluate  # гипотезы используют примитивы этого модуля
     from runners.whatif import whatif  # whatif использует примитивы этого модуля
 
     sections = [trend(snap), queue(snap), canceled(snap), classes(snap), top_projects(snap), hot_project(snap),
-                runners(snap), job_resources(snap), bench_ab(snap), whatif(snap)]
+                runners(snap), job_resources(snap), bench_ab(snap), whatif(snap), evaluate(snap)]
     sections.append(quality(snap, sections))
     return sections
 

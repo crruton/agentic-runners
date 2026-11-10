@@ -47,7 +47,16 @@ SCENARIOS = {
                  "regs": [("0-7", 6144)]},
     "C-two-6g": {"title": "2 регистрации × (4 CPU, 6 GiB)", "rule": "budget1600",
                  "regs": [("0-3", 6144), ("4-7", 6144)]},
+    # H6: без фиксированных слотов. Три регистрации делят все CPU; задание стартует, только если у «хоста»
+    # хватает фактической памяти под его ожидаемый пик и давление памяти (PSI) низкое; memory.high хоста
+    # заставляет ядро тормозить и вытеснять, а не убивать.
+    "P-psi": {"title": "H6: 3 регистрации × (8 CPU, 6 GiB), допуск по памяти и PSI, memory.high хоста",
+              "rule": "budget1600", "regs": [("0-7", 6144)] * 3,
+              "admission": {"admit_mib": 12288, "psi10": 10.0}, "host_high": "13G"},
 }
+
+# Ожидаемый пик задания вместе с его Postgres-сервисом, MiB (E03: пик шардов 4133 и 2567 + сервис)
+EXPECT_MIB = {"pytest": 4600, "dbt": 3000}
 
 PIPELINES = 2
 SHARDS = [("pytest", k) for k in "abc"] + [("dbt", k) for k in "abc"]
@@ -80,11 +89,20 @@ def cg_exec(script):
               "sh", "-c", script)
 
 
-def cg_reset():
+def cg_reset(high=None):
     cg_exec(f"rmdir /cg/{CG} 2>/dev/null; mkdir -p /cg/{CG} && "
             f"echo '+cpu +cpuset +memory +io +pids' > /cg/{CG}/cgroup.subtree_control && "
             f"echo {HOST['cpus']} > /cg/{CG}/cpuset.cpus && echo {HOST['mem']} > /cg/{CG}/memory.max && "
-            f"(echo {HOST['swap']} > /cg/{CG}/memory.swap.max || true)")
+            f"(echo {HOST['swap']} > /cg/{CG}/memory.swap.max || true)"
+            + (f" && echo {high} > /cg/{CG}/memory.high" if high else ""))
+
+
+def host_state():
+    """Фактическая память «хоста» (MiB) и PSI memory some avg10."""
+    out = cg_exec(f"cat /cg/{CG}/memory.current; grep some /cg/{CG}/memory.pressure").split()
+    mem = int(out[0]) // (1024 * 1024)
+    avg10 = float(next(x for x in out if x.startswith("avg10=")).split("=")[1])
+    return mem, avg10
 
 
 def cg_read():
@@ -159,7 +177,9 @@ def run_scenario(name, retry_failed=True):
     if free_gb() < MIN_FREE_GB:
         raise RuntimeError(f"на диске меньше {MIN_FREE_GB} GB свободно — сценарий не запускается")
     sh("docker", "network", "create", "--label", LABEL, NET, check=False)
-    cg_reset()
+    cg_reset(sc.get("host_high"))
+    adm = sc.get("admission")
+    admit_lock = threading.Lock()
     jobs = queue.Queue()
     for p in range(PIPELINES):
         for i, (kind, k) in enumerate(SHARDS):
@@ -172,7 +192,17 @@ def run_scenario(name, retry_failed=True):
                 j = jobs.get_nowait()
             except queue.Empty:
                 return
-            res = {**j, **run_job(reg, j["kind"], j["seed"], sc["rule"])}
+            waited = 0.0
+            if adm:  # H6: допуск по фактической памяти и PSI, решения принимаются по одному
+                with admit_lock:
+                    t_adm = time.time()
+                    while True:
+                        mem, psi = host_state()
+                        if mem + EXPECT_MIB[j["kind"]] <= adm["admit_mib"] and psi < adm["psi10"]:
+                            break
+                        time.sleep(2)
+                    waited = time.time() - t_adm
+            res = {**j, **run_job(reg, j["kind"], j["seed"], sc["rule"]), "admission_wait_s": round(waited, 1)}
             with lock:
                 results.append(res)
             if not res.get("ok") and retry_failed and j["attempt"] == 1:
