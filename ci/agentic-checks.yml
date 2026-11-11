@@ -1,0 +1,21 @@
+# Проверки agentic-runners. Агент аттестует каждую у себя: в образе python:3.11, на закоммиченном дереве,
+#   python -m agentic_runtime.attest run -- <AGENTIC_CMD>
+# В CI шлюз (ci-templates/agentic-attest.yml) не запускает принятые проверки; аудит — 10% коммитов.
+
+tests:
+  stage: test
+  image: python:3.11
+  variables:
+    AGENTIC_CMD: "python -m pytest -q tests"
+  script:
+    - pip install -q -r requirements-dev.txt ./runtime
+    - python -m agentic_runtime.attest verify -- $AGENTIC_CMD
+
+runtime-tests:
+  stage: test
+  image: python:3.11
+  variables:
+    AGENTIC_CMD: "python -m pytest -q runtime/tests -p no:cacheprovider"
+  script:
+    - pip install -q -r requirements-dev.txt ./runtime
+    - python -m agentic_runtime.attest verify -- $AGENTIC_CMD
