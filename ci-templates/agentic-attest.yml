@@ -6,10 +6,13 @@
 variables:
   AGENTIC_RUNTIME_PIP: "agentic-runtime @ git+https://gitlab.raftds.com/architects/agentic-runners.git#subdirectory=runtime"
   AGENTIC_ATTEST_AUDIT_PCT: "10"
+  # Один и тот же точный образ у шлюза, проверок и агента: отпечаток окружения сравнивается с контейнером шлюза.
+  # Плавающий тег (python:3.11) на раннерах с pull_policy: if-not-present даёт разные интерпретаторы.
+  AGENTIC_IMAGE: "python:3.11.18"
 
 attest:gate:
   stage: .pre
-  image: python:3.11            # нужен git: свидетельства лежат в git notes
+  image: $AGENTIC_IMAGE         # тот же образ, что у проверок и агента; нужен git — свидетельства в git notes
   interruptible: true
   script:
     - pip install -q "$AGENTIC_RUNTIME_PIP" pyyaml

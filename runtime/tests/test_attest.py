@@ -113,3 +113,14 @@ def test_gate_disables_attested_checks(repos, tmp_path):
     child = yaml.safe_load((tmp_path / "child.yml").read_text(encoding="utf-8"))
     assert child["tests"] == {"rules": [{"when": "never"}]} and "lint" not in child
     assert "attest:summary" in child
+
+
+def test_mismatch_names_the_field(repos, monkeypatch):
+    origin, agent, ci = repos
+    attest_and_push(agent)
+    sh(ci.parent, "git", "clone", "-q", str(origin), str(ci))
+    os.chdir(ci)
+    sh(ci, "git", "fetch", "-q", "origin", f"+{attest.NOTES}:{attest.NOTES}")
+    monkeypatch.setenv("AGENTIC_ATTEST_ENV", "image@sha256:ci")
+    reason = attest.check(CMD)
+    assert reason.startswith("окружение не совпадает") and "extra" in reason

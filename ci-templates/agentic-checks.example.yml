@@ -4,7 +4,7 @@
 
 lint:
   stage: test
-  image: python:3.11
+  image: $AGENTIC_IMAGE
   variables:
     AGENTIC_CMD: "ruff check ."
   script:
@@ -13,7 +13,7 @@ lint:
 
 tests:
   stage: test
-  image: python:3.11
+  image: $AGENTIC_IMAGE
   variables:
     AGENTIC_CMD: "pytest -q"
   script:

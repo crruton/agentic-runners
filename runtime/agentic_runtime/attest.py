@@ -99,11 +99,23 @@ def check(cmd):
             continue
         got = json.dumps(note["payload"], sort_keys=True, ensure_ascii=False)
         if got != want:
-            return "дерево или окружение не совпадают"
+            return _mismatch(note["payload"], tree, env)
         if not hmac.compare_digest(note["sig"], _sign(_key(), got)):
             return "подпись недействительна"
         return None
     return "нет свидетельства для этой команды"
+
+
+def _mismatch(payload, tree, env):
+    """Какое поле свидетельства не совпало с CI — чтобы расхождение было видно и чинилось."""
+    if payload.get("tree") != tree:
+        return "дерево не совпадает"
+    diffs = []
+    for k in sorted(set(env) | set(payload.get("env", {}))):
+        a, b = payload.get("env", {}).get(k), env.get(k)
+        if a != b:
+            diffs.append(f"{k}: агент {a!r}, CI {b!r}")
+    return "окружение не совпадает — " + "; ".join(diffs) if diffs else "версия формата не совпадает"
 
 
 def verify(cmd):
