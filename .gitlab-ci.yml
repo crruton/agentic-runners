@@ -1,0 +1,13 @@
+# CI проекта agentic-runners: сам проект — первый пользователь аттестации (ADR-0007, E10).
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+include:
+  - local: ci-templates/agentic-attest.yml
+
+variables:
+  AGENTIC_RUNTIME_PIP: "./runtime"   # рантайм ставится из этого же репозитория

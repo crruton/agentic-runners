@@ -1,0 +1,34 @@
+# Аттестация проверок агента (ADR-0007, E10): одно задание-шлюз решает, какие проверки запускать.
+# Проверки проекта лежат в ci/agentic-checks.yml (пример — ci-templates/agentic-checks.example.yml).
+# Принятые по подписанному свидетельству агента и не попавшие в аудит не запускаются вовсе.
+# Нужна CI-переменная AGENTIC_ATTEST_KEY (masked) — тот же ключ, которым подписывают агенты.
+
+variables:
+  AGENTIC_RUNTIME_PIP: "agentic-runtime @ git+https://gitlab.raftds.com/architects/agentic-runners.git#subdirectory=runtime"
+  AGENTIC_ATTEST_AUDIT_PCT: "10"
+
+attest:gate:
+  stage: .pre
+  image: python:3.11            # нужен git: свидетельства лежат в git notes
+  interruptible: true
+  script:
+    - pip install -q "$AGENTIC_RUNTIME_PIP" pyyaml
+    - python -m agentic_runtime.attest gate ci/agentic-checks.yml agentic-child.yml
+  artifacts:
+    paths: [agentic-child.yml]
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+attest:checks:
+  stage: test
+  needs: ["attest:gate"]
+  trigger:
+    include:
+      - artifact: agentic-child.yml
+        job: attest:gate
+    strategy: depend
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push"

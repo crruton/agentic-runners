@@ -1,0 +1,21 @@
+# ci/agentic-checks.yml проекта: проверки, которые агент аттестует у себя.
+# AGENTIC_CMD — ровно та команда, которую агент выполняет через `attest run -- <команда>`.
+# Внутри задания команда идёт через `attest verify`: при аудите расхождение со свидетельством видно в логе.
+
+lint:
+  stage: test
+  image: python:3.11
+  variables:
+    AGENTIC_CMD: "ruff check ."
+  script:
+    - pip install -q "$AGENTIC_RUNTIME_PIP" ruff
+    - python -m agentic_runtime.attest verify -- $AGENTIC_CMD
+
+tests:
+  stage: test
+  image: python:3.11
+  variables:
+    AGENTIC_CMD: "pytest -q"
+  script:
+    - pip install -q "$AGENTIC_RUNTIME_PIP" -r requirements.txt
+    - python -m agentic_runtime.attest verify -- $AGENTIC_CMD

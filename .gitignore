@@ -5,3 +5,7 @@ data/
 *.log
 __pycache__/
 .venv/
+out/
+.pytest_cache/
+build/
+*.egg-info/
