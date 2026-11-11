@@ -54,10 +54,8 @@ PYTHONPATH=runtime PYTEST_ADDOPTS="-p agentic_runtime --rt-workers=auto --rt-cac
 | Путь | Что там |
 |---|---|
 | `runners/` | Снимок источников и отчёт (`python -m runners`) |
-| `docs/plan.md` | Пошаговый план на две недели |
-| `docs/cfp/application.md` | Заявка на доклад |
-| `docs/research/` | Инвентаризация парка, разбор Scion |
-| `docs/experiments/` | Журнал экспериментов: только отсюда берутся числа |
+| `docs/research/` | Инвентаризация, разбор Scion |
+| `docs/experiments/` | Журнал экспериментов |
 | `docs/adr/` | Архитектурные решения |
 | `collect/` | Сбор метрик: история CI, PSI, cgroup |
 | `bench/` | Воспроизводимые нагрузочные сценарии |
