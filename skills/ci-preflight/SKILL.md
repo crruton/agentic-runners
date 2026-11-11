@@ -49,14 +49,19 @@ After each change:
 
 Done when every preflight command is green, or fails only where it already failed in step 1.
 
-## 3. Push green states
+## 3. Attest and push green states
 
 1. Push only after step 2 is done. Commit as often as you like; push once per green state.
-2. Open the MR as Draft while work continues; mark it ready only when the task is complete.
-3. One push triggers one pipeline. Batch follow-up fixes into the next green state instead of pushing
+2. If the project has `ci/agentic-checks.yml`, attest every check it lists: run
+   `python -m agentic_runtime.attest run -- <AGENTIC_CMD>` for each, on the committed tree, then push the
+   notes with the branch: `git push origin HEAD refs/notes/agentic-attest`. CI accepts these checks from
+   the attestation and skips rerunning them. Needs `AGENTIC_ATTEST_KEY` in the environment.
+3. Open the MR as Draft while work continues. Before marking it ready, rebase onto the target branch,
+   rerun and re-attest the checks on the rebased tree, so the merge train accepts the attestation too.
+4. One push triggers one pipeline. Batch follow-up fixes into the next green state instead of pushing
    each one.
 
-Done when the pushed commit is the one you preflighted.
+Done when the pushed commit is the one you preflighted and, where the project uses attestation, its notes are pushed.
 
 ## 4. A red pipeline
 

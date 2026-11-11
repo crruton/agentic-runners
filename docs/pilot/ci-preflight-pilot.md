@@ -33,4 +33,4 @@
 
 ## Замер
 
-Через неделю, под VPN: `python -m runners snapshot`, затем та же команда `runners pilot` на новом снимке. Результат — в `docs/experiments/E10-ci-preflight-pilot.md`.
+Через неделю, под VPN: `python -m runners snapshot`, затем та же команда `runners pilot` на новом снимке. Результат — в `docs/experiments/E11-ci-preflight-pilot.md`.

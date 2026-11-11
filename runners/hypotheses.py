@@ -173,13 +173,38 @@ def h13_builds(snap):
             "risk": f"в среднем {r1(per.mean())} одноимённых сборок в проекте за сутки; реальная доля попаданий в кэш неизвестна"}
 
 
+def h14_attestation(snap, audit_pct=10, verify_s=15, gate=False, train=False):
+    """H14: CI принимает подписанное свидетельство агента вместо повторной проверки (ADR-0007).
+
+    Проверки (классы test, lint, other, browser-e2e) в MR-пайплайнах, push в ветки и push в основную ветку
+    заменяются проверкой свидетельства за `verify_s` секунд; доля `audit_pct` коммитов проверяется полностью.
+    Поезд слияния, расписания, сборки и выкатка не меняются. Предполагается, что агент пушит только
+    после своей зелёной проверки (скилл ci-preflight), поэтому красные прогоны в CI тоже уходят.
+    """
+    g = _gitlab(snap)
+    total = g.h.sum()
+    is_train = g.ref.astype(str).str.startswith("train/")
+    src = g.source.isin(["merge_request_event", "push"]) & (~is_train | train)  # поезд — только с флагом train
+    scope = src & g.cls.isin(["test", "lint", "other", "browser-e2e"])
+    jobs = g[scope]
+    replaced = jobs.h.sum()
+    checks = jobs.pipeline_id.nunique() if gate else len(jobs)  # шлюз: одна проверка на пайплайн
+    after = checks * verify_s / 3600 + replaced * audit_pct / 100
+    hid = "h14" + ("g" if gate else "") + ("t" if train else "")
+    what = ("шлюз на пайплайн" if gate else "проверка в каждом задании") + (", поезд по свидетельству" if train else "")
+    return {"id": hid, "hyp": f"H14 Аттестация агента: {what}, аудит {audit_pct}%", "src": "gitlab",
+            "saved_h": replaced - after, "total_h": total,
+            "risk": f"{checks} проверок свидетельства по {verify_s} с; на раннерах остаются сборки, выкатка, расписания и аудит"}
+
+
 def evaluate(snap):
     s = Section("hyp", "Гипотезы: офлайн-оценка по истории", "gitlab + ci_analytics", "")
     if snap.gitlab is None or snap.jobs is None or snap.pipelines is None:
         s.missing = True
         return s
     rows = [h1_fail_fast(snap), h3_breaker(snap), *h2_preflight(snap), h10_train_only(snap),
-            h12_batching(snap), h13_builds(snap)]
+            h12_batching(snap), h13_builds(snap), h14_attestation(snap), h14_attestation(snap, gate=True),
+            h14_attestation(snap, gate=True, train=True)]
     t = pd.DataFrame(rows).set_index("id")
     t["saved_pct"] = (100 * t.saved_h / t.total_h).round(1)
     t["saved_h"] = t.saved_h.round(0)
