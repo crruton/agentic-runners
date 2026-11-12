@@ -15,7 +15,9 @@
     python -m agentic_runtime.attest verify --image "$CI_JOB_IMAGE" -- "sh scripts/ci/test.sh"   # в CI
 
 Окружение: AGENTIC_ATTEST_KEY (секрет подписи, HMAC-SHA256), AGENTIC_ATTEST_AUDIT_PCT (по умолчанию 10),
-AGENTIC_ATTEST_ENV (необязательно: строка окружения сверх автоматической, например digest образа CI).
+AGENTIC_ATTEST_ENV (необязательно: строка окружения сверх автоматической, например digest образа CI),
+AGENTIC_ATTEST_DOCKER_ARGS (необязательно, режим образа: аргументы docker run у агента — кэш пакетов, зеркало;
+в отпечаток не входят, результат проверки задают дерево, образ и lock-файлы).
 """
 
 import hashlib
@@ -86,6 +88,7 @@ def _run_in_image(image, script):
     Копия — неглубокий клон HEAD с .git (как checkout в CI, тесты могут звать git), концы строк — как в
     репозитории (core.autocrlf=false: на Windows рабочая копия может быть в CRLF, в CI — LF).
     """
+    import shlex
     import shutil
     import tempfile
 
@@ -99,7 +102,7 @@ def _run_in_image(image, script):
         mount = ["-v", f"{work}:/w", "-w", "/w", "-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
                  "-e", "GIT_CONFIG_VALUE_0=*"]
         rc = subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-e", "CI=true", *mount,
-                              image, "sh", "-c", script])
+                              *shlex.split(os.environ.get("AGENTIC_ATTEST_DOCKER_ARGS", "")), image, "sh", "-c", script])
         # файлы, созданные в контейнере от root, удаляет сам контейнер
         subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", *mount, image,
                          "sh", "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null; true"], stdout=subprocess.DEVNULL)
