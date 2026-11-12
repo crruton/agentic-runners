@@ -10,8 +10,9 @@
     python -m agentic_runtime.attest run    -- pytest -q        # у агента
     python -m agentic_runtime.attest verify -- pytest -q        # в CI, внутри задания
     python -m agentic_runtime.attest gate ci/agentic-checks.yml child.yml   # в CI, шлюз пайплайна
-    python -m agentic_runtime.attest run --image node:20-alpine@sha256:... -- "npm ci && npm test"
+    python -m agentic_runtime.attest run --image node:20-alpine@sha256:... -- "sh scripts/ci/test.sh"
                                                                 # у агента, режим образа (любой язык)
+    python -m agentic_runtime.attest verify --image "$CI_JOB_IMAGE" -- "sh scripts/ci/test.sh"   # в CI
 
 Окружение: AGENTIC_ATTEST_KEY (секрет подписи, HMAC-SHA256), AGENTIC_ATTEST_AUDIT_PCT (по умолчанию 10),
 AGENTIC_ATTEST_ENV (необязательно: строка окружения сверх автоматической, например digest образа CI).
@@ -80,24 +81,27 @@ def audited(tree, pct):
 
 
 def _run_in_image(image, script):
-    """Выполнить команду в образе CI на копии закоммиченного дерева (git archive HEAD), не на рабочей копии."""
-    import io as _io
+    """Выполнить команду в образе CI на копии закоммиченного дерева, а не на рабочей копии.
+
+    Копия — неглубокий клон HEAD с .git (как checkout в CI, тесты могут звать git), концы строк — как в
+    репозитории (core.autocrlf=false: на Windows рабочая копия может быть в CRLF, в CI — LF).
+    """
     import shutil
-    import tarfile
     import tempfile
 
     work = tempfile.mkdtemp(prefix="agentic-attest-")
     try:
-        data = subprocess.run(["git", "archive", "--format=tar", "HEAD"], capture_output=True, check=True).stdout
-        with tarfile.open(fileobj=_io.BytesIO(data)) as tar:
-            if hasattr(tarfile, "data_filter"):
-                tar.extractall(work, filter="data")
-            else:  # Python до 3.12: архив из собственного git, доверенный
-                tar.extractall(work)
-        rc = subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-v", f"{work}:/w", "-w", "/w",
+        src = os.path.abspath(git("rev-parse", "--show-toplevel"))
+        subprocess.run(["git", "-c", "init.defaultBranch=attest", "init", "-q", work], check=True)
+        subprocess.run(["git", "-C", work, "config", "core.autocrlf", "false"], check=True)
+        subprocess.run(["git", "-C", work, "fetch", "-q", "--depth=1", src, "HEAD"], check=True)
+        subprocess.run(["git", "-C", work, "checkout", "-q", "FETCH_HEAD"], check=True)
+        mount = ["-v", f"{work}:/w", "-w", "/w", "-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
+                 "-e", "GIT_CONFIG_VALUE_0=*"]
+        rc = subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-e", "CI=true", *mount,
                               image, "sh", "-c", script])
         # файлы, созданные в контейнере от root, удаляет сам контейнер
-        subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-v", f"{work}:/w", image,
+        subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", *mount, image,
                          "sh", "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null; true"], stdout=subprocess.DEVNULL)
         return rc
     finally:
@@ -162,18 +166,21 @@ def _mismatch(payload, tree, env):
     return "окружение не совпадает — " + "; ".join(diffs) if diffs else "версия формата не совпадает"
 
 
-def verify(cmd):
-    """В CI: принять свидетельство или выполнить команду (нет свидетельства, не совпало, аудит)."""
+def verify(cmd, image=None):
+    """В CI: принять свидетельство или выполнить команду (нет свидетельства, не совпало, аудит).
+
+    С image (в задании CI — "$CI_JOB_IMAGE") команда — одна строка для sh -c, как у агента в режиме образа.
+    """
     git("fetch", "-q", "origin", f"+{NOTES}:{NOTES}", check=False)
     tree = git("rev-parse", "HEAD^{tree}")
     pct = int(os.environ.get("AGENTIC_ATTEST_AUDIT_PCT", "10"))
-    why = check(cmd)
+    why = check(cmd, image)
     if why is None and not audited(tree, pct):
         print(f"agentic-attest: проверка принята по свидетельству агента (дерево {tree[:12]}), команда не выполняется")
         return 0
     reason = "аудит" if why is None else why
     print(f"agentic-attest: выполняю команду ({reason})")
-    rc = subprocess.call(cmd)
+    rc = subprocess.call(["sh", "-c", cmd[0]] if image else cmd)
     if why is None and rc != 0:
         print("agentic-attest: АУДИТ НЕ СОШЁЛСЯ — свидетельство подтверждало успех, проверка упала", file=sys.stderr)
     return rc
@@ -225,11 +232,11 @@ def main(argv=None):
     if len(argv) == 3 and argv[0] == "gate":
         gate(argv[1], argv[2])
         return 0
-    if len(argv) == 5 and argv[0] == "run" and argv[1] == "--image" and argv[3] == "--":
-        return run([argv[4]], argv[2])
+    if len(argv) == 5 and argv[0] in ("run", "verify") and argv[1] == "--image" and argv[3] == "--":
+        return (run if argv[0] == "run" else verify)([argv[4]], argv[2])
     if len(argv) < 3 or argv[0] not in ("run", "verify") or argv[1] != "--":
         sys.exit("использование: python -m agentic_runtime.attest run|verify -- <команда> | "
-                 "run --image <образ@sha256:...> -- \"<команда sh>\" | gate <checks.yml> <child.yml>")
+                 "run|verify --image <образ@sha256:...> -- \"<команда sh>\" | gate <checks.yml> <child.yml>")
     cmd = argv[2:]
     return (run if argv[0] == "run" else verify)(cmd)
 

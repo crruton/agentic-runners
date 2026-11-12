@@ -127,15 +127,19 @@ def test_mismatch_names_the_field(repos, monkeypatch):
 
 
 @pytest.mark.skipif(os.environ.get("AGENTIC_DOCKER_TESTS") != "1", reason="нужен Docker: AGENTIC_DOCKER_TESTS=1")
-def test_image_mode_checks_committed_tree_and_gate_accepts(repos, tmp_path):
+def test_image_mode_checks_committed_tree_and_gate_accepts(repos, tmp_path, monkeypatch):
     yaml = pytest.importorskip("yaml")
     subprocess.run(["docker", "pull", "-q", "alpine:3.20"], check=True, capture_output=True)
     digest = subprocess.run(["docker", "image", "inspect", "alpine:3.20", "--format", "{{index .RepoDigests 0}}"],
                             check=True, capture_output=True, text=True).stdout.strip()
     origin, agent, ci = repos
     os.chdir(agent)
+    sh(agent, "git", "config", "core.autocrlf", "true")  # как на Windows: рабочая копия в CRLF
+    (agent / "app.py").unlink()
+    sh(agent, "git", "checkout", "--", "app.py")
     (agent / "local-only.txt").write_text("not committed\n", encoding="utf-8")  # рабочая копия, не коммит
-    script = "test -f app.py && test ! -f local-only.txt"
+    script = 'test -f app.py && test ! -f local-only.txt && test -d .git && ! grep -q "$(printf "\r")" app.py'
+
     assert attest.run([script], digest) == 0           # видит ровно дерево коммита
     sh(agent, "git", "push", "-q", "origin", "HEAD", attest.NOTES)
     sh(ci.parent, "git", "clone", "-q", str(origin), str(ci))
@@ -147,6 +151,8 @@ def test_image_mode_checks_committed_tree_and_gate_accepts(repos, tmp_path):
     decisions = attest.gate(str(checks), str(tmp_path / "child.yml"))
     assert decisions["tests"] is None                  # образ по digest совпал — принято
     assert decisions["other"] is not None              # плавающий тег — режим процесса, свидетельства нет
+    monkeypatch.setenv("AGENTIC_ATTEST_AUDIT_PCT", "0")
+    assert attest.verify([script], digest) == 0        # задание CI с "$CI_JOB_IMAGE" принимает то же свидетельство
 
 
 def test_missing_ci_key_runs_checks_instead_of_failing(repos, monkeypatch):
