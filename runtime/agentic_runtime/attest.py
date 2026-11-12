@@ -86,27 +86,33 @@ def _run_in_image(image, script):
     """Выполнить команду в образе CI на копии закоммиченного дерева, а не на рабочей копии.
 
     Копия — неглубокий клон HEAD с .git (как checkout в CI, тесты могут звать git), концы строк — как в
-    репозитории (core.autocrlf=false: на Windows рабочая копия может быть в CRLF, в CI — LF).
+    репозитории (core.autocrlf=false: на Windows рабочая копия может быть в CRLF, в CI — LF). Копия уходит
+    в контейнер tar-потоком и живёт в его файловой системе: bind mount Docker Desktop на Windows и macOS
+    в разы медленнее, и тесты, которые обходят дерево, на нём падают по таймауту.
     """
     import shlex
     import shutil
+    import tarfile
     import tempfile
 
     work = tempfile.mkdtemp(prefix="agentic-attest-")
     try:
         src = os.path.abspath(git("rev-parse", "--show-toplevel"))
-        subprocess.run(["git", "-c", "init.defaultBranch=attest", "init", "-q", work], check=True)
-        subprocess.run(["git", "-C", work, "config", "core.autocrlf", "false"], check=True)
-        subprocess.run(["git", "-C", work, "fetch", "-q", "--depth=1", src, "HEAD"], check=True)
-        subprocess.run(["git", "-C", work, "checkout", "-q", "FETCH_HEAD"], check=True)
-        mount = ["-v", f"{work}:/w", "-w", "/w", "-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
-                 "-e", "GIT_CONFIG_VALUE_0=*"]
-        rc = subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-e", "CI=true", *mount,
-                              *shlex.split(os.environ.get("AGENTIC_ATTEST_DOCKER_ARGS", "")), image, "sh", "-c", script])
-        # файлы, созданные в контейнере от root, удаляет сам контейнер
-        subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", *mount, image,
-                         "sh", "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null; true"], stdout=subprocess.DEVNULL)
-        return rc
+        tree = os.path.join(work, "w")
+        subprocess.run(["git", "-c", "init.defaultBranch=attest", "init", "-q", tree], check=True)
+        subprocess.run(["git", "-C", tree, "config", "core.autocrlf", "false"], check=True)
+        subprocess.run(["git", "-C", tree, "fetch", "-q", "--depth=1", src, "HEAD"], check=True)
+        subprocess.run(["git", "-C", tree, "checkout", "-q", "FETCH_HEAD"], check=True)
+        archive = os.path.join(work, "w.tar")
+        with tarfile.open(archive, "w") as tar:
+            tar.add(tree, arcname=".")
+        unpack = 'mkdir -p /w && tar -xf - -C /w && cd /w && exec sh -c "$1"'
+        with open(archive, "rb") as stdin:
+            return subprocess.call(["docker", "run", "--rm", "-i", "--label", "agentic-attest=1", "-e", "CI=true",
+                                    "-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory",
+                                    "-e", "GIT_CONFIG_VALUE_0=*",
+                                    *shlex.split(os.environ.get("AGENTIC_ATTEST_DOCKER_ARGS", "")),
+                                    image, "sh", "-c", unpack, "attest", script], stdin=stdin)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
