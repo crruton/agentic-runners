@@ -53,7 +53,8 @@ Done when every preflight command is green, or fails only where it already faile
 
 1. Push only after step 2 is done. Commit as often as you like; push once per green state.
 2. If the project has `ci/agentic-checks.yml`, attest every check it lists: run
-   `python -m agentic_runtime.attest run -- <AGENTIC_CMD>` for each, on the committed tree, then push the
+   `python -m agentic_runtime.attest run -- <AGENTIC_CMD>` for each, on the committed tree (when the job's
+   `image` is pinned by `@sha256:`, run `attest run --image <that image> -- "<AGENTIC_CMD>"`), then push the
    notes with the branch: `git push origin HEAD refs/notes/agentic-attest`. CI accepts these checks from
    the attestation and skips rerunning them. Needs `AGENTIC_ATTEST_KEY` in the environment.
 3. Open the MR as Draft while work continues. Before marking it ready, rebase onto the target branch,
