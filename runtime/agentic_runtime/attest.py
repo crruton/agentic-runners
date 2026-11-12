@@ -10,6 +10,8 @@
     python -m agentic_runtime.attest run    -- pytest -q        # у агента
     python -m agentic_runtime.attest verify -- pytest -q        # в CI, внутри задания
     python -m agentic_runtime.attest gate ci/agentic-checks.yml child.yml   # в CI, шлюз пайплайна
+    python -m agentic_runtime.attest run --image node:20-alpine@sha256:... -- "npm ci && npm test"
+                                                                # у агента, режим образа (любой язык)
 
 Окружение: AGENTIC_ATTEST_KEY (секрет подписи, HMAC-SHA256), AGENTIC_ATTEST_AUDIT_PCT (по умолчанию 10),
 AGENTIC_ATTEST_ENV (необязательно: строка окружения сверх автоматической, например digest образа CI).
@@ -35,15 +37,26 @@ def git(*args, check=True):
                           check=check).stdout.strip()
 
 
-def environment():
-    """Отпечаток окружения: интерпретатор, ОС и архитектура, lock-файлы дерева, явная строка AGENTIC_ATTEST_ENV."""
+def _locks():
     locks = {}
     for f in LOCKS:
         blob = git("rev-parse", f"HEAD:{f}", check=False)
         if blob and not blob.startswith("fatal"):
             locks[f] = blob
+    return locks
+
+
+def environment(image=None):
+    """Отпечаток окружения.
+
+    Режим образа (image задан, обычно с @sha256): точный образ задания CI и lock-файлы дерева — проверка
+    у агента идёт в том же образе, интерпретатор самого attest роли не играет.
+    Режим процесса: интерпретатор, ОС и архитектура, lock-файлы, строка AGENTIC_ATTEST_ENV.
+    """
+    if image:
+        return {"image": image, "locks": _locks()}
     return {"python": platform.python_version(), "os": platform.system(), "arch": platform.machine(),
-            "locks": locks, "extra": os.environ.get("AGENTIC_ATTEST_ENV", "")}
+            "locks": _locks(), "extra": os.environ.get("AGENTIC_ATTEST_ENV", "")}
 
 
 def _payload(tree, cmd, env):
@@ -66,13 +79,41 @@ def audited(tree, pct):
     return int(hashlib.sha256(("audit:" + tree).encode()).hexdigest(), 16) % 100 < pct
 
 
-def run(cmd):
-    """У агента: выполнить проверку на чистом закоммиченном дереве и записать свидетельство при успехе."""
+def _run_in_image(image, script):
+    """Выполнить команду в образе CI на копии закоммиченного дерева (git archive HEAD), не на рабочей копии."""
+    import io as _io
+    import shutil
+    import tarfile
+    import tempfile
+
+    work = tempfile.mkdtemp(prefix="agentic-attest-")
+    try:
+        data = subprocess.run(["git", "archive", "--format=tar", "HEAD"], capture_output=True, check=True).stdout
+        with tarfile.open(fileobj=_io.BytesIO(data)) as tar:
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(work, filter="data")
+            else:  # Python до 3.12: архив из собственного git, доверенный
+                tar.extractall(work)
+        rc = subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-v", f"{work}:/w", "-w", "/w",
+                              image, "sh", "-c", script])
+        # файлы, созданные в контейнере от root, удаляет сам контейнер
+        subprocess.call(["docker", "run", "--rm", "--label", "agentic-attest=1", "-v", f"{work}:/w", image,
+                         "sh", "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null; true"], stdout=subprocess.DEVNULL)
+        return rc
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def run(cmd, image=None):
+    """У агента: выполнить проверку на чистом закоммиченном дереве и записать свидетельство при успехе.
+
+    С image команда — одна строка для sh -c и выполняется в этом образе на копии дерева коммита.
+    """
     if git("status", "--porcelain", "--untracked-files=no"):
         sys.exit("agentic-attest: есть незакоммиченные изменения — свидетельство описывает только коммит")
-    tree, env = git("rev-parse", "HEAD^{tree}"), environment()
+    tree, env = git("rev-parse", "HEAD^{tree}"), environment(image)
     t0 = time.time()
-    rc = subprocess.call(cmd)
+    rc = _run_in_image(image, cmd[0]) if image else subprocess.call(cmd)
     if rc != 0:
         return rc
     payload = _payload(tree, cmd, env)
@@ -87,12 +128,12 @@ def run(cmd):
     return 0
 
 
-def check(cmd):
+def check(cmd, image=None):
     """Причина, по которой свидетельство не принимается, или None, если принимается."""
     raw = git("notes", "--ref", NOTES, "show", "HEAD", check=False)
     if not raw.startswith("["):
         return "нет свидетельства"
-    tree, env = git("rev-parse", "HEAD^{tree}"), environment()
+    tree, env = git("rev-parse", "HEAD^{tree}"), environment(image)
     want = _payload(tree, cmd, env)
     for note in json.loads(raw):
         if note["payload"]["cmd"] != cmd:
@@ -100,7 +141,10 @@ def check(cmd):
         got = json.dumps(note["payload"], sort_keys=True, ensure_ascii=False)
         if got != want:
             return _mismatch(note["payload"], tree, env)
-        if not hmac.compare_digest(note["sig"], _sign(_key(), got)):
+        key = os.environ.get("AGENTIC_ATTEST_KEY")
+        if not key:  # ключ ещё не заведён в CI: проверки идут как раньше, пайплайн не ломается
+            return "в CI не задан AGENTIC_ATTEST_KEY"
+        if not hmac.compare_digest(note["sig"], _sign(key, got)):
             return "подпись недействительна"
         return None
     return "нет свидетельства для этой команды"
@@ -156,7 +200,10 @@ def gate(checks_path, out_path):
         cmd = (job or {}).get("variables", {}).get("AGENTIC_CMD") if isinstance(job, dict) else None
         if not cmd:
             continue
-        why = check(shlex.split(cmd))
+        image = job.get("image")
+        image = image.get("name") if isinstance(image, dict) else image
+        # образ, закреплённый по digest, — режим образа: агент проверял ровно в нём
+        why = check([cmd], image) if image and "@sha256:" in str(image) else check(shlex.split(cmd))
         if why is None and not audited(tree, pct):
             decisions[name] = None
             child[name] = {"rules": [{"when": "never"}]}
@@ -178,8 +225,11 @@ def main(argv=None):
     if len(argv) == 3 and argv[0] == "gate":
         gate(argv[1], argv[2])
         return 0
+    if len(argv) == 5 and argv[0] == "run" and argv[1] == "--image" and argv[3] == "--":
+        return run([argv[4]], argv[2])
     if len(argv) < 3 or argv[0] not in ("run", "verify") or argv[1] != "--":
-        sys.exit("использование: python -m agentic_runtime.attest run|verify -- <команда> | gate <checks.yml> <child.yml>")
+        sys.exit("использование: python -m agentic_runtime.attest run|verify -- <команда> | "
+                 "run --image <образ@sha256:...> -- \"<команда sh>\" | gate <checks.yml> <child.yml>")
     cmd = argv[2:]
     return (run if argv[0] == "run" else verify)(cmd)
 

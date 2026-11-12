@@ -124,3 +124,33 @@ def test_mismatch_names_the_field(repos, monkeypatch):
     monkeypatch.setenv("AGENTIC_ATTEST_ENV", "image@sha256:ci")
     reason = attest.check(CMD)
     assert reason.startswith("окружение не совпадает") and "extra" in reason
+
+
+@pytest.mark.skipif(os.environ.get("AGENTIC_DOCKER_TESTS") != "1", reason="нужен Docker: AGENTIC_DOCKER_TESTS=1")
+def test_image_mode_checks_committed_tree_and_gate_accepts(repos, tmp_path):
+    yaml = pytest.importorskip("yaml")
+    subprocess.run(["docker", "pull", "-q", "alpine:3.20"], check=True, capture_output=True)
+    digest = subprocess.run(["docker", "image", "inspect", "alpine:3.20", "--format", "{{index .RepoDigests 0}}"],
+                            check=True, capture_output=True, text=True).stdout.strip()
+    origin, agent, ci = repos
+    os.chdir(agent)
+    (agent / "local-only.txt").write_text("not committed\n", encoding="utf-8")  # рабочая копия, не коммит
+    script = "test -f app.py && test ! -f local-only.txt"
+    assert attest.run([script], digest) == 0           # видит ровно дерево коммита
+    sh(agent, "git", "push", "-q", "origin", "HEAD", attest.NOTES)
+    sh(ci.parent, "git", "clone", "-q", str(origin), str(ci))
+    os.chdir(ci)
+    checks = ci / "checks.yml"
+    checks.write_text(yaml.safe_dump({"tests": {"image": digest, "script": [script], "variables": {"AGENTIC_CMD": script}},
+                                      "other": {"image": "alpine:3.20", "script": [script], "variables": {"AGENTIC_CMD": script}}}),
+                      encoding="utf-8")
+    decisions = attest.gate(str(checks), str(tmp_path / "child.yml"))
+    assert decisions["tests"] is None                  # образ по digest совпал — принято
+    assert decisions["other"] is not None              # плавающий тег — режим процесса, свидетельства нет
+
+
+def test_missing_ci_key_runs_checks_instead_of_failing(repos, monkeypatch):
+    origin, agent, ci = repos
+    attest_and_push(agent)
+    monkeypatch.delenv("AGENTIC_ATTEST_KEY")
+    assert ci_verify(origin, ci) == (0, True)  # проверка выполнена, пайплайн не упал
